@@ -78,7 +78,7 @@ artefactos versionables — CLAUDE.md con gates resueltos, `.claude/` mínimo,
 | Capa | Contenido | Se actualiza |
 |---|---|---|
 | Motor (`~/.claude`) | CLAUDE.md global, output-style, skills, agents, hooks, settings | con el paquete, 1 vez por máquina |
-| Datos (repo) | `argos.config.json` | casi nunca; `argos adopt` |
+| Datos (repo) | `argos.config.json` + ficha (CLAUDE.md delgado) | `argos adopt [--refresh]` cuando cambian los hechos del repo |
 | Export (repo, opt-in) | CLAUDE.md/.claude/.cursor/copilot compilados | `argos export --apply` cuando cambia el motor |
 | Registro (`~/.argos`) | workspaces (bonum / personal), selección, backups | por comandos |
 
@@ -109,8 +109,27 @@ artefactos versionables — CLAUDE.md con gates resueltos, `.claude/` mínimo,
 Esquema mínimo: `name`, `language`, `workspace`, `branchBase`, `prTarget`,
 `qualityGate { fast, full }`, `project { criticalAreas, legacyPaths }`,
 `identity` (alias git esperado — verifica la regla Bonum/personal),
-`export { engines: [...] }` (opt-in del modo equipo). Sin presets ni selección
-de skills: eso es del motor.
+`stack` (hechos detectados: framework, package manager, libs relevantes),
+`skills` (qué skills del motor aplican a este repo — detectados en adopt),
+`export { engines: [...] }` (opt-in del modo equipo).
+
+Los skills viven una sola vez en el motor; el repo declara CUÁLES le aplican.
+La detección ocurre en `adopt` (una vez), no en runtime: cero tokens de
+detección por sesión, y la selección queda explícita y auditable.
+
+## Ficha del repo (CLAUDE.md delgado)
+
+`adopt` escribe además una ficha: un CLAUDE.md de ~10 líneas (`argos:managed`)
+con los hechos resueltos en texto literal — quality gate, rama base, áreas
+críticas, workspace, skills aplicables. Claude Code la auto-carga al trabajar
+en el repo, así el modelo no gasta ni un Read para conocer el repo.
+
+Distinción crítica con el render del harness original: la ficha es
+**presentación de datos del repo**, no contenido del harness. Se regenera con
+`adopt --refresh` cuando cambian los hechos del repo (nueva lib, otro gate) —
+**nunca por actualizar el motor**. El drift entre capas no puede existir
+porque las capas no comparten contenido. `doctor` compara ficha/config contra
+`package.json` y sugiere re-adopt cuando quedaron viejas.
 
 ## Coexistencia y migración desde navori-harness
 
@@ -150,8 +169,10 @@ argos adopt                     # detecta stack + quality gate + identidad por
 
 ## Tradeoffs aceptados
 
-- Resolución runtime en modo operador: el modelo lee la config del repo en vez
-  de recibir el comando inline (tokens + una indirección por sesión).
+- La ficha del repo elimina la indirección para los hechos frecuentes (gate,
+  rama, skills); la indirección runtime queda solo para datos raros que la
+  ficha no lleva. El costo residual es mantener la ficha fresca (`doctor`
+  vigila config/ficha vs package.json).
 - Modo equipo requiere el paso de export y su disciplina de regeneración
   (acotada a repos opt-in, con doctor vigilando drift).
 - Hooks globales corren en todo repo con config; sin config no hay gate
