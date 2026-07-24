@@ -3,10 +3,13 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  applyOutputStylePolicy,
   type ArgosHookSpec,
   isArgosHookCommand,
+  isNavoriOutputStyle,
   mergeHooksIntoSettings,
   removeAllArgosHooksFromSettings,
+  removeOutputStyleIfArgos,
 } from "./settings-merge.js";
 
 describe("isArgosHookCommand", () => {
@@ -303,5 +306,166 @@ describe("removeAllArgosHooksFromSettings", () => {
     // The foreign-only "Write" bucket survives untouched, with its hook intact.
     const writeBucket = written.hooks.PreToolUse.find((b) => b.matcher === "Write");
     expect(writeBucket?.hooks).toEqual([{ type: "command", command: `bash "${foreignScriptPath}"` }]);
+  });
+});
+
+describe("isNavoriOutputStyle", () => {
+  it("is true for the bare 'navori' value", () => {
+    expect(isNavoriOutputStyle("navori")).toBe(true);
+  });
+
+  it("is true for a path-ish value whose FINAL segment is exactly navori.md", () => {
+    expect(isNavoriOutputStyle("/home/x/.claude/output-styles/navori.md")).toBe(true);
+    expect(isNavoriOutputStyle("output-styles\\navori.md")).toBe(true);
+    expect(isNavoriOutputStyle("NAVORI.MD")).toBe(true); // extension case-insensitive
+  });
+
+  it("never false-positive-matches on substring — a user's own similarly-named voice is untouched", () => {
+    expect(isNavoriOutputStyle("navori-fork")).toBe(false);
+    expect(isNavoriOutputStyle("navori-team-voice")).toBe(false);
+    expect(isNavoriOutputStyle("/home/x/.claude/output-styles/navori-fork.md")).toBe(false);
+    expect(isNavoriOutputStyle("output-styles/navori")).toBe(false); // no .md extension — not an exact navori.md filename
+  });
+
+  it("is false for any other voice, and for non-string values", () => {
+    expect(isNavoriOutputStyle("my-custom-voice")).toBe(false);
+    expect(isNavoriOutputStyle("Argos")).toBe(false);
+    expect(isNavoriOutputStyle(undefined)).toBe(false);
+    expect(isNavoriOutputStyle(42)).toBe(false);
+  });
+});
+
+describe("applyOutputStylePolicy", () => {
+  let dir: string;
+  let settingsPath: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "argos-settings-outputstyle-"));
+    settingsPath = join(dir, "settings.json");
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("sets outputStyle to Argos when the key is absent (missing file)", () => {
+    const result = applyOutputStylePolicy(settingsPath);
+
+    expect(result.status).toBe("created");
+    const written = JSON.parse(readFileSync(settingsPath, "utf-8")) as { outputStyle: string };
+    expect(written.outputStyle).toBe("Argos");
+  });
+
+  it("sets outputStyle to Argos when the key is absent from an existing file, preserving every other key", () => {
+    writeFileSync(settingsPath, JSON.stringify({ foo: "bar" }, null, 2), "utf-8");
+
+    const result = applyOutputStylePolicy(settingsPath);
+
+    expect(result.status).toBe("created");
+    const written = JSON.parse(readFileSync(settingsPath, "utf-8")) as { outputStyle: string; foo: string };
+    expect(written.outputStyle).toBe("Argos");
+    expect(written.foo).toBe("bar");
+  });
+
+  it("is unchanged when outputStyle is already Argos", () => {
+    writeFileSync(settingsPath, JSON.stringify({ outputStyle: "Argos" }, null, 2), "utf-8");
+
+    const result = applyOutputStylePolicy(settingsPath);
+
+    expect(result.status).toBe("unchanged");
+  });
+
+  it("takes over a navori value by default (takeoverNavori unset = true)", () => {
+    writeFileSync(settingsPath, JSON.stringify({ outputStyle: "navori" }, null, 2), "utf-8");
+
+    const result = applyOutputStylePolicy(settingsPath);
+
+    expect(result.status).toBe("updated");
+    expect(result.detail).toContain("navori");
+    expect(result.detail).toContain("Argos");
+    const written = JSON.parse(readFileSync(settingsPath, "utf-8")) as { outputStyle: string };
+    expect(written.outputStyle).toBe("Argos");
+  });
+
+  it("leaves a navori value untouched when takeoverNavori is false (declined)", () => {
+    writeFileSync(settingsPath, JSON.stringify({ outputStyle: "navori" }, null, 2), "utf-8");
+
+    const result = applyOutputStylePolicy(settingsPath, { takeoverNavori: false });
+
+    expect(result.status).toBe("untouched");
+    const written = JSON.parse(readFileSync(settingsPath, "utf-8")) as { outputStyle: string };
+    expect(written.outputStyle).toBe("navori");
+  });
+
+  it("never touches a foreign (non-navori) voice, regardless of takeoverNavori", () => {
+    writeFileSync(settingsPath, JSON.stringify({ outputStyle: "my-custom-voice" }, null, 2), "utf-8");
+
+    const result = applyOutputStylePolicy(settingsPath, { takeoverNavori: true });
+
+    expect(result.status).toBe("untouched");
+    const written = JSON.parse(readFileSync(settingsPath, "utf-8")) as { outputStyle: string };
+    expect(written.outputStyle).toBe("my-custom-voice");
+  });
+
+  it("returns status: error and writes nothing on corrupt JSON", () => {
+    writeFileSync(settingsPath, "{ not json", "utf-8");
+    const before = readFileSync(settingsPath, "utf-8");
+
+    const result = applyOutputStylePolicy(settingsPath);
+
+    expect(result.status).toBe("error");
+    expect(readFileSync(settingsPath, "utf-8")).toBe(before);
+  });
+});
+
+describe("removeOutputStyleIfArgos", () => {
+  let dir: string;
+  let settingsPath: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "argos-settings-outputstyle-remove-"));
+    settingsPath = join(dir, "settings.json");
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("removes outputStyle when it's exactly Argos, preserving every other key", () => {
+    writeFileSync(settingsPath, JSON.stringify({ outputStyle: "Argos", foo: "bar" }, null, 2), "utf-8");
+
+    const result = removeOutputStyleIfArgos(settingsPath);
+
+    expect(result.status).toBe("removed");
+    const written = JSON.parse(readFileSync(settingsPath, "utf-8")) as { outputStyle?: string; foo: string };
+    expect(written.outputStyle).toBeUndefined();
+    expect(written.foo).toBe("bar");
+  });
+
+  it("leaves a foreign (non-Argos) outputStyle untouched", () => {
+    writeFileSync(settingsPath, JSON.stringify({ outputStyle: "my-custom-voice" }, null, 2), "utf-8");
+
+    const result = removeOutputStyleIfArgos(settingsPath);
+
+    expect(result.status).toBe("unchanged");
+    const written = JSON.parse(readFileSync(settingsPath, "utf-8")) as { outputStyle: string };
+    expect(written.outputStyle).toBe("my-custom-voice");
+  });
+
+  it("is unchanged when the key is absent, or the file is missing", () => {
+    expect(removeOutputStyleIfArgos(settingsPath).status).toBe("unchanged");
+
+    writeFileSync(settingsPath, JSON.stringify({ foo: "bar" }, null, 2), "utf-8");
+    expect(removeOutputStyleIfArgos(settingsPath).status).toBe("unchanged");
+  });
+
+  it("dryRun reports removed without writing anything", () => {
+    writeFileSync(settingsPath, JSON.stringify({ outputStyle: "Argos" }, null, 2), "utf-8");
+    const before = readFileSync(settingsPath, "utf-8");
+
+    const result = removeOutputStyleIfArgos(settingsPath, { dryRun: true });
+
+    expect(result.status).toBe("removed");
+    expect(readFileSync(settingsPath, "utf-8")).toBe(before);
   });
 });

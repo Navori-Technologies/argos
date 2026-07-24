@@ -207,6 +207,38 @@ function checkHookSettings(findings: DoctorFinding[], claudeDir: string): void {
 }
 
 /**
+ * Voice activation (spec 0004 "Activación de la voz"): Argos's own
+ * output-style asset is installed on disk (`output-styles/argos.md`, with
+ * the argos:file marker) but `settings.json.outputStyle` isn't `"Argos"` —
+ * the voice is present but not the one Claude Code will actually load.
+ * Read-only, guarded against a missing/corrupt settings.json (never throws).
+ */
+function checkOutputStyleVoice(findings: DoctorFinding[], claudeDir: string): void {
+  const outputStylePath = join(claudeDir, "output-styles", "argos.md");
+  if (!existsSync(outputStylePath)) return; // nothing installed — checkMotor's own full-file check already covers this
+  if (!hasArgosFileMarker(readFileSafe(outputStylePath, findings, "output-styles/argos.md"))) return; // foreign, not ours to opine on
+
+  const settingsPath = join(claudeDir, "settings.json");
+  if (!existsSync(settingsPath)) {
+    findings.push({ level: "warning", message: "La voz de Argos está instalada pero no activa. Corre argos init." });
+    return;
+  }
+
+  let settings: unknown;
+  try {
+    const raw = readFileSync(settingsPath, "utf-8");
+    settings = raw.trim().length === 0 ? {} : JSON.parse(raw);
+  } catch {
+    return; // settings.json's own JSON validity is already reported by checkHookSettings
+  }
+
+  const outputStyle = isPlainObject(settings) ? settings.outputStyle : undefined;
+  if (outputStyle !== "Argos") {
+    findings.push({ level: "warning", message: "La voz de Argos está instalada pero no activa. Corre argos init." });
+  }
+}
+
+/**
  * Workspaces (F2, motor scope): `~/.argos/workspaces.json` registry entries
  * whose repo path no longer exists on disk (moved/deleted repo). Guarded
  * against a corrupt registry file — never throws.
@@ -314,6 +346,7 @@ function checkMotor(findings: DoctorFinding[]): void {
 
   checkHookScripts(findings, claudeDir, currentVersion);
   checkHookSettings(findings, claudeDir);
+  checkOutputStyleVoice(findings, claudeDir);
   checkWorkspaceRegistryHealth(findings);
 }
 

@@ -295,6 +295,30 @@ describe("runDoctor", () => {
     ).toBe(true);
   });
 
+  // --- spec 0004: voice activation (settings.json.outputStyle) -------------
+
+  it("warns when the voice asset is installed but settings.json.outputStyle isn't Argos", () => {
+    runInit();
+    const settingsPath = join(claudeDir, "settings.json");
+    const settings = JSON.parse(readFileSync(settingsPath, "utf-8")) as Record<string, unknown>;
+    settings.outputStyle = "my-custom-voice";
+    writeFileSync(settingsPath, JSON.stringify(settings, null, 2), "utf-8");
+
+    const report = runDoctor({ cwd: nonRepoDir });
+
+    expect(
+      report.findings.some((f) => f.level === "warning" && /voz de Argos está instalada pero no activa/.test(f.message)),
+    ).toBe(true);
+  });
+
+  it("does not warn about the voice when outputStyle is already Argos", () => {
+    runInit();
+
+    const report = runDoctor({ cwd: nonRepoDir });
+
+    expect(report.findings.some((f) => /voz de Argos está instalada pero no activa/.test(f.message))).toBe(false);
+  });
+
   // --- F2: workspaces ------------------------------------------------------
 
   it("suggests `argos workspace link` when the repo isn't registered in any workspace", () => {

@@ -1,8 +1,60 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { runInit } from "./init.js";
+import type { Prompter } from "../lib/prompter.js";
+import { runInit, runInitInteractive } from "./init.js";
+
+const CANCEL = Symbol("cancel");
+
+/**
+ * Trivial injectable fake for `Prompter` — every surface's interactive test
+ * builds one of these instead of touching `@clack/prompts` internals (spec
+ * 0004's "el prompter es inyectable" acceptance criterion). `answers` is
+ * consumed in call order across `select`/`confirm`/`text`; a `CANCEL`
+ * sentinel anywhere in the queue makes that call (and only that call)
+ * behave like a real cancelled clack prompt.
+ */
+function makeFakePrompter(answers: unknown[]): Prompter {
+  let i = 0;
+  const next = () => answers[i++];
+  return {
+    select: async () => next() as never,
+    confirm: async () => next() as never,
+    text: async () => next() as never,
+    isCancel: (value: unknown): value is symbol => value === CANCEL,
+    cancel: () => {},
+    note: () => {},
+    intro: () => {},
+    outro: () => {},
+  };
+}
+
+/** Recursively snapshot every file under `dir` as a relative-path -> content map, for "touched nothing" assertions. */
+function snapshotDir(dir: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!existsSync(dir)) return out;
+  const walk = (current: string, prefix: string) => {
+    for (const entry of readdirSync(current, { withFileTypes: true })) {
+      const full = join(current, entry.name);
+      const rel = prefix ? join(prefix, entry.name) : entry.name;
+      if (entry.isDirectory()) walk(full, rel);
+      else out[rel] = readFileSync(full, "utf-8");
+    }
+  };
+  walk(dir, "");
+  return out;
+}
 
 describe("runInit", () => {
   let claudeDir: string;
@@ -289,6 +341,26 @@ describe("runInit", () => {
       expect(row?.detail).toBeTruthy();
       expect(readFileSync(join(claudeDir, "settings.json"), "utf-8")).toBe(corrupt);
     });
+
+    it("installHooks: false on a SECOND run does not retroactively strip hooks a prior run already installed", () => {
+      runInit(); // default run installs both hooks + their settings.json entries
+      const guardScriptPath = join(claudeDir, "hooks", "argos-guard-destructive.sh");
+      const gateScriptPath = join(claudeDir, "hooks", "argos-quality-gate.sh");
+      expect(existsSync(guardScriptPath)).toBe(true);
+      expect(existsSync(gateScriptPath)).toBe(true);
+      const settingsBefore = readFileSync(join(claudeDir, "settings.json"), "utf-8");
+
+      const report = runInit({ installHooks: false });
+
+      // Untouched — a later run toggling hooks off is not a retroactive
+      // uninstall; that's `argos remove`'s job (see commands/init.ts's
+      // hooks-gating comment).
+      expect(existsSync(guardScriptPath)).toBe(true);
+      expect(existsSync(gateScriptPath)).toBe(true);
+      expect(readFileSync(join(claudeDir, "settings.json"), "utf-8")).toBe(settingsBefore);
+      expect(report.rows.some((r) => r.path.startsWith("hooks/"))).toBe(false);
+      expect(report.rows.some((r) => r.path === "settings.json")).toBe(false);
+    });
   });
 
   describe("skill directories (not just SKILL.md)", () => {
@@ -339,6 +411,184 @@ describe("runInit", () => {
       const coreRow = report.rows.find((r) => r.path === join("skills", "angular", "references", "core.md"));
       expect(coreRow?.status).toBe("skipped-foreign");
       expect(existsSync(join(skillDir, "references", "core.md"))).toBe(false);
+    });
+  });
+});
+
+describe("runInitInteractive", () => {
+  let claudeDir: string;
+  let argosHome: string;
+  const originalClaudeDir = process.env.CLAUDE_CONFIG_DIR;
+  const originalArgosHome = process.env.ARGOS_HOME;
+
+  beforeEach(() => {
+    claudeDir = mkdtempSync(join(tmpdir(), "argos-init-interactive-claude-"));
+    argosHome = mkdtempSync(join(tmpdir(), "argos-init-interactive-home-"));
+    process.env.CLAUDE_CONFIG_DIR = claudeDir;
+    process.env.ARGOS_HOME = argosHome;
+  });
+
+  afterEach(() => {
+    rmSync(claudeDir, { recursive: true, force: true });
+    rmSync(argosHome, { recursive: true, force: true });
+    if (originalClaudeDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = originalClaudeDir;
+    if (originalArgosHome === undefined) delete process.env.ARGOS_HOME;
+    else process.env.ARGOS_HOME = originalArgosHome;
+  });
+
+  it("--yes / no-TTY is byte-identical to calling runInit directly, even with a prompter injected", async () => {
+    const prompter = makeFakePrompter([]); // never consulted — --yes short-circuits before any prompt call
+    const viaInteractive = await runInitInteractive({ language: "en", yes: true, prompter });
+
+    rmSync(claudeDir, { recursive: true, force: true });
+    rmSync(argosHome, { recursive: true, force: true });
+    mkdirSync(claudeDir, { recursive: true });
+    mkdirSync(argosHome, { recursive: true });
+    const viaDirect = runInit({ language: "en" });
+
+    expect(viaInteractive.exitCode).toBe(viaDirect.exitCode);
+    expect(viaInteractive.rows).toEqual(viaDirect.rows);
+  });
+
+  it("no real TTY (yes unset, this test runner has none attached) never calls the injected prompter", async () => {
+    let calls = 0;
+    const prompter: Prompter = {
+      ...makeFakePrompter([]),
+      select: async () => {
+        calls++;
+        return CANCEL as never;
+      },
+    };
+    const report = await runInitInteractive({ prompter });
+
+    expect(calls).toBe(0);
+    expect(report.exitCode).toBe(0);
+    expect(existsSync(join(claudeDir, "CLAUDE.md"))).toBe(true);
+  });
+
+  describe("forced-interactive (stubbed TTY)", () => {
+    let originalStdoutIsTTY: PropertyDescriptor | undefined;
+    let originalStdinIsTTY: PropertyDescriptor | undefined;
+
+    beforeEach(() => {
+      originalStdoutIsTTY = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+      originalStdinIsTTY = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+      Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
+      Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+    });
+
+    afterEach(() => {
+      if (originalStdoutIsTTY) Object.defineProperty(process.stdout, "isTTY", originalStdoutIsTTY);
+      else delete (process.stdout as { isTTY?: boolean }).isTTY;
+      if (originalStdinIsTTY) Object.defineProperty(process.stdin, "isTTY", originalStdinIsTTY);
+      else delete (process.stdin as { isTTY?: boolean }).isTTY;
+    });
+
+    it("happy path: language, agents, hooks, final confirm — writes exactly what was chosen", async () => {
+      const prompter = makeFakePrompter([
+        "en", // language
+        true, // installAgents
+        false, // installHooks
+        true, // final confirm
+      ]);
+
+      const report = await runInitInteractive({ prompter });
+
+      expect(report.exitCode).toBe(0);
+      expect(existsSync(join(claudeDir, "agents", "explorer.md"))).toBe(true);
+      expect(existsSync(join(claudeDir, "hooks", "argos-guard-destructive.sh"))).toBe(false);
+      const globalJson = JSON.parse(readFileSync(join(argosHome, "global.json"), "utf-8")) as { language: string };
+      expect(globalJson.language).toBe("en");
+    });
+
+    it("cancelling at any step touches nothing on disk", async () => {
+      const prompter = makeFakePrompter([CANCEL]); // cancel right at the language select
+      const before = existsSync(claudeDir) ? readdirSync(claudeDir) : [];
+
+      const report = await runInitInteractive({ prompter });
+
+      expect(report.exitCode).toBe(1);
+      expect(report.rows).toEqual([]);
+      const after = existsSync(claudeDir) ? readdirSync(claudeDir) : [];
+      expect(after).toEqual(before);
+    });
+
+    it("cancelling at the final confirm step also touches nothing on disk", async () => {
+      const prompter = makeFakePrompter(["es", true, true, false]); // final confirm = false
+      const before = existsSync(claudeDir) ? readdirSync(claudeDir) : [];
+
+      const report = await runInitInteractive({ prompter });
+
+      expect(report.exitCode).toBe(1);
+      expect(report.rows).toEqual([]);
+      const after = existsSync(claudeDir) ? readdirSync(claudeDir) : [];
+      expect(after).toEqual(before);
+    });
+
+    describe("navori voice takeover prompt", () => {
+      function seedNavoriOutputStyle(): string {
+        mkdirSync(claudeDir, { recursive: true });
+        const settingsPath = join(claudeDir, "settings.json");
+        writeFileSync(settingsPath, JSON.stringify({ outputStyle: "navori" }, null, 2), "utf-8");
+        return settingsPath;
+      }
+
+      it("accepting the takeover prompt replaces navori with Argos and reports it", async () => {
+        const settingsPath = seedNavoriOutputStyle();
+        const prompter = makeFakePrompter([
+          "es", // language
+          true, // installAgents
+          true, // installHooks
+          true, // accept the navori takeover prompt
+          true, // final confirm
+        ]);
+
+        const report = await runInitInteractive({ prompter });
+
+        expect(report.exitCode).toBe(0);
+        const row = report.rows.find((r) => r.path === "settings.json#outputStyle");
+        expect(row?.status).toBe("updated");
+        expect(row?.detail).toMatch(/navori.*Argos/);
+        const settings = JSON.parse(readFileSync(settingsPath, "utf-8")) as { outputStyle: string };
+        expect(settings.outputStyle).toBe("Argos");
+      });
+
+      it("declining the takeover prompt leaves outputStyle at navori, untouched", async () => {
+        const settingsPath = seedNavoriOutputStyle();
+        const prompter = makeFakePrompter([
+          "es",
+          true,
+          true,
+          false, // decline the navori takeover prompt
+          true, // final confirm — the rest of init still proceeds
+        ]);
+
+        const report = await runInitInteractive({ prompter });
+
+        expect(report.exitCode).toBe(0);
+        const row = report.rows.find((r) => r.path === "settings.json#outputStyle");
+        expect(row?.status).toBe("skipped-foreign");
+        const settings = JSON.parse(readFileSync(settingsPath, "utf-8")) as { outputStyle: string };
+        expect(settings.outputStyle).toBe("navori");
+      });
+
+      it("cancelling exactly at the takeover prompt touches nothing on disk", async () => {
+        seedNavoriOutputStyle();
+        const before = snapshotDir(claudeDir);
+        const prompter = makeFakePrompter([
+          "es",
+          true,
+          true,
+          CANCEL, // cancel right at the navori takeover prompt
+        ]);
+
+        const report = await runInitInteractive({ prompter });
+
+        expect(report.exitCode).toBe(1);
+        expect(report.rows).toEqual([]);
+        expect(snapshotDir(claudeDir)).toEqual(before);
+      });
     });
   });
 });

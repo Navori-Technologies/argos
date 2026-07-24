@@ -10,12 +10,14 @@ import {
   type WorkspaceAgentRow,
   type WorkspaceAgentStatus,
 } from "../lib/openclaw-agents.js";
+import { isInteractive, clackPrompter, type Prompter } from "../lib/prompter.js";
 import {
   addRemoteMatchRule,
   linkRepo,
   loadRegistry,
   offerMatchRule,
   resolveWorkspaceForRepo,
+  WorkspaceNameCollisionError,
   type LinkAction,
 } from "../lib/workspaces.js";
 import { hasBinary as hasBinaryDefault } from "../lib/which.js";
@@ -34,6 +36,13 @@ export interface WorkspaceLinkOptions {
   force?: boolean;
 }
 
+export interface WorkspaceLinkCollision {
+  workspaceName: string;
+  repoName: string;
+  oldPath: string;
+  newPath: string;
+}
+
 export interface WorkspaceLinkReport {
   exitCode: 0 | 1;
   error?: string;
@@ -43,6 +52,15 @@ export interface WorkspaceLinkReport {
   createdWorkspace?: boolean;
   /** Remote identity persisted as a new match rule, if the offer fired. */
   matchRuleAdded?: string;
+  /**
+   * Populated instead of a bare `error` string when `linkRepo` refused with
+   * `WorkspaceNameCollisionError` (see lib/workspaces.ts) — lets the
+   * interactive layer offer overwrite/cancel (the equivalent of `--force`)
+   * without having to string-parse `error`. Additive: `error` is still set
+   * alongside it, so any caller only reading `error` behaves exactly as
+   * before.
+   */
+  collision?: WorkspaceLinkCollision;
 }
 
 /**
@@ -103,6 +121,18 @@ export function runWorkspaceLink(options: WorkspaceLinkOptions): WorkspaceLinkRe
   try {
     linkResult = linkRepo(resolution.name, { name: config.name, path: cwd }, { force });
   } catch (err) {
+    if (err instanceof WorkspaceNameCollisionError) {
+      return {
+        exitCode: 1,
+        error: errorMessage(err),
+        collision: {
+          workspaceName: err.workspaceName,
+          repoName: err.repoName,
+          oldPath: err.oldPath,
+          newPath: err.newPath,
+        },
+      };
+    }
     return { exitCode: 1, error: errorMessage(err) };
   }
 
@@ -130,6 +160,87 @@ export function runWorkspaceLink(options: WorkspaceLinkOptions): WorkspaceLinkRe
   };
 }
 
+export interface WorkspaceLinkInteractiveOptions extends WorkspaceLinkOptions {
+  /** Injectable for tests; defaults to the real `@clack/prompts`-backed prompter. */
+  prompter?: Prompter;
+}
+
+/**
+ * Interactive layer over `runWorkspaceLink` (spec 0004 F5 "argos workspace
+ * link"). A pure additive wrapper — the core `runWorkspaceLink` never
+ * changes behavior or contract. Without a real TTY this delegates to
+ * `runWorkspaceLink(options)` unchanged (there's no `--yes` on this command:
+ * absence of a real TTY is itself sufficient gate, per spec 0004). With a
+ * TTY: an ambiguous match-rule resolution is resolved via `select` instead
+ * of erroring, and a name collision (`WorkspaceNameCollisionError`) is
+ * offered as an overwrite/cancel prompt — the interactive equivalent of
+ * `--force`, which stays the non-interactive escape hatch unchanged.
+ */
+export async function runWorkspaceLinkInteractive(
+  options: WorkspaceLinkInteractiveOptions,
+): Promise<WorkspaceLinkReport> {
+  if (!isInteractive({})) {
+    return runWorkspaceLink(options);
+  }
+
+  const prompter = options.prompter ?? clackPrompter;
+  const { cwd, explicit, force } = options;
+
+  // Resolve ambiguity read-only first, mirroring runWorkspaceLink's own
+  // resolution chain, before ever calling the writing core — an explicit
+  // name (whether passed on the CLI or picked here) always short-circuits
+  // resolveWorkspaceForRepo straight to "resolved", so no duplicate
+  // ambiguity handling happens inside the core call below.
+  let effectiveExplicit = explicit;
+  if (!explicit) {
+    if (!hasConfig(cwd)) return runWorkspaceLink(options); // identical error path, no prompts needed
+    let config: ArgosConfig;
+    try {
+      config = readConfig(cwd);
+    } catch {
+      return runWorkspaceLink(options); // identical error path
+    }
+    const remoteUrl = getRemoteOriginUrl(cwd);
+    let registry: ReturnType<typeof loadRegistry>;
+    try {
+      registry = loadRegistry();
+    } catch {
+      return runWorkspaceLink(options); // identical error path
+    }
+    const resolution = resolveWorkspaceForRepo(registry, { configWorkspace: config.workspace, remoteUrl, repoPath: cwd });
+    if (resolution.kind === "ambiguous") {
+      const chosen = await prompter.select<string>({
+        message: `Match ambiguo entre workspaces (${resolution.source}) — elegí uno:`,
+        options: resolution.candidates.map((c) => ({ value: c })),
+      });
+      if (prompter.isCancel(chosen)) {
+        prompter.cancel("argos workspace link cancelado — no se tocó nada.");
+        return { exitCode: 1, error: "argos workspace link cancelado por el usuario." };
+      }
+      effectiveExplicit = chosen;
+    }
+  }
+
+  let report = runWorkspaceLink({ cwd, explicit: effectiveExplicit, force });
+
+  if (report.collision && !force) {
+    const overwrite = await prompter.confirm({
+      message:
+        `El repo '${report.collision.repoName}' ya está registrado en el workspace '${report.collision.workspaceName}' ` +
+        `apuntando a otro path.\n  actual: ${report.collision.oldPath}\n  nuevo:  ${report.collision.newPath}\n` +
+        "¿Sobrescribir con el path nuevo?",
+      initialValue: false,
+    });
+    if (prompter.isCancel(overwrite) || !overwrite) {
+      prompter.cancel("argos workspace link cancelado — no se tocó nada.");
+      return report; // original failed report — nothing further was touched
+    }
+    report = runWorkspaceLink({ cwd, explicit: effectiveExplicit, force: true });
+  }
+
+  return report;
+}
+
 const linkSubCommand = defineCommand({
   meta: {
     name: "link",
@@ -143,8 +254,8 @@ const linkSubCommand = defineCommand({
       description: "Sobrescribe un choque de nombre (mismo config.name, repo físico distinto).",
     },
   },
-  run({ args }) {
-    const report = runWorkspaceLink({
+  async run({ args }) {
+    const report = await runWorkspaceLinkInteractive({
       cwd: process.cwd(),
       explicit: (args.name as string | undefined)?.trim() || undefined,
       force: Boolean(args.force),

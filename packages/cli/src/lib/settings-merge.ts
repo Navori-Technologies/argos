@@ -285,6 +285,238 @@ export function mergeHooksIntoSettings(
   return { status: existed ? "updated" : "created" };
 }
 
+// --- output-style ("voice activation") — spec 0004 "Activación de la voz" ---
+
+/**
+ * True when `value` (a `settings.json.outputStyle` value) points at the
+ * predecessor harness's voice (`navori`) — matched EXACTLY, never by
+ * substring. Claude Code custom output styles are typically just the bare
+ * style name (e.g. `"navori"`, backed by `~/.claude/output-styles/navori.md`),
+ * but a hand-edited value could plausibly carry a path-ish form instead
+ * (`.../output-styles/navori.md`) — this also matches that shape, but only
+ * when the FINAL path segment, split on `/` or `\`, is exactly `navori.md`
+ * (case-insensitive extension). A bare `.includes("navori.md")` or
+ * `.includes("output-styles/navori")` substring check would false-positive
+ * on a user's own unrelated voice whose name merely starts with "navori"
+ * (e.g. `navori-fork.md`, `navori-team-voice`) — and since
+ * `applyOutputStylePolicy` defaults to taking this over unconditionally on
+ * the non-interactive path (`--yes`/no-TTY, the common CI/agent path), a
+ * false match there would silently clobber an unrelated user setting with
+ * zero confirmation. Anchoring to exact equality closes that hole.
+ */
+export function isNavoriOutputStyle(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  if (value === "navori") return true;
+  const lastSegment = value.split(/[/\\]/).pop() ?? "";
+  return lastSegment.toLowerCase() === "navori.md";
+}
+
+export type OutputStyleStatus = "created" | "updated" | "unchanged" | "untouched" | "error";
+
+export interface ApplyOutputStyleResult {
+  status: OutputStyleStatus;
+  detail?: string;
+}
+
+export interface ApplyOutputStyleOptions {
+  /**
+   * Whether to take over a `navori`-matched value into `"Argos"`. Only
+   * consulted when the current value matches `isNavoriOutputStyle` — ignored
+   * when the key is absent (always set) or matches some other foreign voice
+   * (never touched, regardless of this flag). Default `true`, matching the
+   * `--yes`/no-TTY "replace unconditionally" behavior from spec 0004;
+   * callers backing an interactive confirm prompt pass `false` when the user
+   * declines.
+   */
+  takeoverNavori?: boolean;
+  /** Same test-only race seam as `MergeHooksOptions.onBeforeWrite` above. */
+  onBeforeWrite?: () => void;
+}
+
+/**
+ * Surgical policy for `settings.json.outputStyle` (spec 0004 "Activación de
+ * la voz"), same mechanics as `mergeHooksIntoSettings`: read (missing file →
+ * `{}`), mtime captured at read time, corrupt/unexpected JSON shape → writes
+ * nothing and returns `status: "error"`, mutate in memory, re-stat right
+ * before an atomic write and bail if the file moved underneath us.
+ *
+ * - Key absent → set to `"Argos"` (`created`/`updated` depending on whether
+ *   the file itself existed).
+ * - Key already `"Argos"` → `unchanged`, no write.
+ * - Key matches the predecessor voice (`isNavoriOutputStyle`) → takeover
+ *   governed by `options.takeoverNavori` (default `true`): accepted →
+ *   overwritten to `"Argos"`, `status: "updated"` with an explicit detail
+ *   naming the takeover; declined → `status: "untouched"`, nothing written.
+ * - Key matches any other value → NEVER touched, `status: "untouched"`.
+ *
+ * Every other top-level key in `settings.json` is left exactly as found —
+ * same surgical contract as the hooks merge.
+ */
+export function applyOutputStylePolicy(
+  settingsPath: string,
+  options: ApplyOutputStyleOptions = {},
+): ApplyOutputStyleResult {
+  const existed = existsSync(settingsPath);
+  let raw = "{}";
+  let mtimeAtRead: number | undefined;
+  if (existed) {
+    try {
+      raw = readFileSync(settingsPath, "utf-8");
+      mtimeAtRead = statSync(settingsPath).mtimeMs;
+    } catch (err) {
+      return { status: "error", detail: errorMessage(err) };
+    }
+  }
+
+  let settings: Record<string, unknown>;
+  try {
+    const parsed: unknown = raw.trim().length === 0 ? {} : JSON.parse(raw);
+    if (!isPlainObject(parsed)) {
+      return { status: "error", detail: "settings.json existente no es un objeto JSON — arreglalo a mano." };
+    }
+    settings = parsed;
+  } catch (err) {
+    return {
+      status: "error",
+      detail: `settings.json existente tiene JSON inválido (${errorMessage(err)}) — arreglalo a mano y volvé a correr argos init.`,
+    };
+  }
+
+  const current = settings.outputStyle;
+
+  if (current === "Argos") {
+    return { status: "unchanged" };
+  }
+
+  if (current !== undefined && !isNavoriOutputStyle(current)) {
+    return {
+      status: "untouched",
+      detail: `outputStyle ya apunta a otra voz ('${String(current)}') — no se toca`,
+    };
+  }
+
+  if (current !== undefined && isNavoriOutputStyle(current)) {
+    const takeover = options.takeoverNavori ?? true;
+    if (!takeover) {
+      return {
+        status: "untouched",
+        detail: `outputStyle sigue en '${String(current)}' (voz del harness predecesor) — takeover declinado`,
+      };
+    }
+  }
+
+  const previous = current;
+  settings.outputStyle = "Argos";
+
+  options.onBeforeWrite?.();
+
+  if (existed && mtimeAtRead !== undefined) {
+    let mtimeNow: number | undefined;
+    try {
+      mtimeNow = statSync(settingsPath).mtimeMs;
+    } catch {
+      mtimeNow = undefined;
+    }
+    if (mtimeNow !== undefined && mtimeNow !== mtimeAtRead) {
+      return { status: "error", detail: "settings.json cambió durante el merge — reintenta." };
+    }
+  }
+
+  try {
+    writeFileAtomic(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+  } catch (err) {
+    return { status: "error", detail: errorMessage(err) };
+  }
+
+  if (previous !== undefined) {
+    return { status: "updated", detail: `reemplazó ${String(previous)} → Argos` };
+  }
+  // `previous === undefined` here means the KEY was absent (not that the
+  // file itself was absent) — always "created" regardless of `existed`,
+  // since another writer (e.g. `mergeHooksIntoSettings`, in the same
+  // `runInit` call) may have already created the file moments earlier for
+  // an unrelated reason.
+  return { status: "created" };
+}
+
+export type RemoveOutputStyleStatus = "removed" | "unchanged" | "error";
+
+export interface RemoveOutputStyleResult {
+  status: RemoveOutputStyleStatus;
+  detail?: string;
+}
+
+export interface RemoveOutputStyleOptions {
+  /** Same `argos remove` preview-mode seam as `RemoveHooksOptions.dryRun` above. */
+  dryRun?: boolean;
+  /** Same test-only race seam as `MergeHooksOptions.onBeforeWrite` above. */
+  onBeforeWrite?: () => void;
+}
+
+/**
+ * `argos remove`'s mirror of `applyOutputStylePolicy`: removes
+ * `settings.json.outputStyle` ONLY when it's exactly `"Argos"` — Argos's own
+ * value. Any other value (including a foreign voice `argos init` never
+ * touched, or the key simply absent) is left exactly as found; this command
+ * only ever cleans up after itself, never after the user's own choice of
+ * voice. Same missing-file/corrupt-JSON/mtime-guard/atomic-write mechanics
+ * as the rest of this module.
+ */
+export function removeOutputStyleIfArgos(
+  settingsPath: string,
+  options: RemoveOutputStyleOptions = {},
+): RemoveOutputStyleResult {
+  if (!existsSync(settingsPath)) return { status: "unchanged" };
+
+  let raw: string;
+  let mtimeAtRead: number;
+  try {
+    raw = readFileSync(settingsPath, "utf-8");
+    mtimeAtRead = statSync(settingsPath).mtimeMs;
+  } catch (err) {
+    return { status: "error", detail: errorMessage(err) };
+  }
+
+  let settings: Record<string, unknown>;
+  try {
+    const parsed: unknown = raw.trim().length === 0 ? {} : JSON.parse(raw);
+    if (!isPlainObject(parsed)) {
+      return { status: "error", detail: "settings.json existente no es un objeto JSON — arreglalo a mano." };
+    }
+    settings = parsed;
+  } catch (err) {
+    return {
+      status: "error",
+      detail: `settings.json existente tiene JSON inválido (${errorMessage(err)}) — arreglalo a mano.`,
+    };
+  }
+
+  if (settings.outputStyle !== "Argos") return { status: "unchanged" };
+  if (options.dryRun) return { status: "removed" };
+
+  delete settings.outputStyle;
+
+  options.onBeforeWrite?.();
+
+  let mtimeNow: number | undefined;
+  try {
+    mtimeNow = statSync(settingsPath).mtimeMs;
+  } catch {
+    mtimeNow = undefined;
+  }
+  if (mtimeNow !== undefined && mtimeNow !== mtimeAtRead) {
+    return { status: "error", detail: "settings.json cambió durante el remove — reintenta." };
+  }
+
+  try {
+    writeFileAtomic(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+  } catch (err) {
+    return { status: "error", detail: errorMessage(err) };
+  }
+
+  return { status: "removed" };
+}
+
 export type RemoveHooksStatus = "removed" | "unchanged" | "error";
 
 export interface RemoveHooksResult {

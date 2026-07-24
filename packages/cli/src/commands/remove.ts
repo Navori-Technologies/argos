@@ -8,7 +8,8 @@ import { createBackup } from "../lib/backup.js";
 import { listBlocks, removeBlock } from "../lib/markers.js";
 import { hasArgosFileMarker, hasArgosShellFileMarker } from "../lib/managed-files.js";
 import { resolveArgosHome, resolveClaudeDir } from "../lib/paths.js";
-import { removeAllArgosHooksFromSettings } from "../lib/settings-merge.js";
+import { isInteractive, clackPrompter, type Prompter } from "../lib/prompter.js";
+import { removeAllArgosHooksFromSettings, removeOutputStyleIfArgos } from "../lib/settings-merge.js";
 
 /**
  * Uninstaller for `argos init`: the mirror image of `runInit` (see
@@ -399,6 +400,27 @@ export function runRemove(options: RemoveOptions = {}): RemoveReport {
     });
   }
 
+  // Voice activation (spec 0004): remove settings.json.outputStyle ONLY when
+  // it's still exactly "Argos" — the value argos init wrote. Any other
+  // voice (a foreign one init never touched, or the key simply absent) is
+  // left byte-identical; this is `argos remove`'s own value to clean up
+  // after, never the user's.
+  const outputStyleResult = removeOutputStyleIfArgos(settingsPath, { dryRun: !apply });
+  if (outputStyleResult.status === "error") {
+    rows.push({
+      path: "settings.json#outputStyle",
+      category: "settings-entries",
+      status: "error",
+      detail: outputStyleResult.detail,
+    });
+  } else if (outputStyleResult.status === "removed") {
+    rows.push({
+      path: "settings.json#outputStyle",
+      category: "settings-entries",
+      status: apply ? "removed" : "would-remove",
+    });
+  }
+
   if (purge) processPurge(apply, rows, warnings);
 
   // Always-present closing note: repo-side artifacts (argos.config.json, the
@@ -413,6 +435,75 @@ export function runRemove(options: RemoveOptions = {}): RemoveReport {
 
   const exitCode: 0 | 1 = rows.some((r) => r.status === "error") ? 1 : 0;
   return { rows, summary: summarize(rows, apply), exitCode, backupPath, warnings };
+}
+
+export interface RemoveInteractiveOptions extends RemoveOptions {
+  /** `--yes`: forces non-interactive behavior even under a real TTY. */
+  yes?: boolean;
+  /** Injectable for tests; defaults to the real `@clack/prompts`-backed prompter. */
+  prompter?: Prompter;
+}
+
+/**
+ * A cancelled confirmation's report: identical shape to a run that touched
+ * nothing. `exitCode: 1` — a cancel is neither a successful write nor
+ * silently indistinguishable from one by exit code alone (matches
+ * `runWorkspaceLinkInteractive`'s convention for its own cancel paths).
+ */
+function cancelledRemoveReport(reason: string): RemoveReport {
+  return {
+    rows: [{ path: "cancel", category: "scope-note", status: "info", detail: reason }],
+    summary: `argos remove: cancelado — no se tocó nada (${reason}).`,
+    exitCode: 1,
+    warnings: [],
+  };
+}
+
+/**
+ * Interactive layer over `runRemove` (spec 0004 F5 "argos remove"). A pure
+ * additive wrapper — the core `runRemove` never changes behavior or
+ * contract. Without a real TTY, with `--yes`, or for a plain preview
+ * (`apply: false`, the default) this delegates to `runRemove(options)`
+ * unchanged — no prompt library call is ever reached on those paths. With a
+ * TTY AND `apply: true`, requires the operator to type the exact target
+ * directory (`resolveClaudeDir()`) before proceeding; `purge: true` on top
+ * of that requires a SECOND, separate confirmation mentioning backups.
+ * Either confirmation failing/cancelling aborts with zero writes.
+ */
+export async function runRemoveInteractive(options: RemoveInteractiveOptions = {}): Promise<RemoveReport> {
+  const apply = options.apply ?? false;
+  const purge = options.purge ?? false;
+
+  if (!isInteractive({ yes: options.yes }) || !apply) {
+    return runRemove(options);
+  }
+
+  const prompter = options.prompter ?? clackPrompter;
+  const claudeDir = resolveClaudeDir();
+
+  const typed = await prompter.text({
+    message: `Esto desinstala el motor Argos de ${claudeDir}. Escribí "${claudeDir}" para confirmar:`,
+  });
+  if (prompter.isCancel(typed) || typed !== claudeDir) {
+    prompter.cancel("argos remove cancelado — no se tocó nada.");
+    return cancelledRemoveReport("confirmación de directorio no coincide o fue cancelada");
+  }
+
+  if (purge) {
+    const confirmPurge = await prompter.confirm({
+      message:
+        "--purge también borra ~/.argos/backups — se pierde la red de seguridad de esta y de toda operación anterior. ¿Confirmás?",
+      initialValue: false,
+    });
+    if (prompter.isCancel(confirmPurge) || !confirmPurge) {
+      prompter.cancel("argos remove cancelado — no se tocó nada.");
+      return cancelledRemoveReport("--purge no confirmado");
+    }
+  }
+
+  const report = runRemove(options);
+  prompter.outro(report.summary);
+  return report;
 }
 
 export const removeCommand = defineCommand({
@@ -431,9 +522,14 @@ export const removeCommand = defineCommand({
       default: false,
       description: "Also remove ~/.argos data (registry, global.json, backups). Irreversible.",
     },
+    yes: {
+      type: "boolean",
+      default: false,
+      description: "Fuerza modo no interactivo aunque haya una TTY real (salta las confirmaciones tipadas).",
+    },
   },
-  run({ args }) {
-    const report = runRemove({ apply: args.apply, purge: args.purge });
+  async run({ args }) {
+    const report = await runRemoveInteractive({ apply: args.apply, purge: args.purge, yes: Boolean(args.yes) });
 
     const colorize = (status: RemoveRowStatus): string => {
       const padded = status.padEnd(18);

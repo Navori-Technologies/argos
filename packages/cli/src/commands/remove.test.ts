@@ -3,9 +3,28 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { Prompter } from "../lib/prompter.js";
 import { runAdopt } from "./adopt.js";
 import { runInit } from "./init.js";
-import { type RemoveRow, runRemove } from "./remove.js";
+import { type RemoveRow, runRemove, runRemoveInteractive } from "./remove.js";
+
+const CANCEL = Symbol("cancel");
+
+/** Same trivial injectable fake as init.test.ts — see its doc comment. */
+function makeFakePrompter(answers: unknown[]): Prompter {
+  let i = 0;
+  const next = () => answers[i++];
+  return {
+    select: async () => next() as never,
+    confirm: async () => next() as never,
+    text: async () => next() as never,
+    isCancel: (value: unknown): value is symbol => value === CANCEL,
+    cancel: () => {},
+    note: () => {},
+    intro: () => {},
+    outro: () => {},
+  };
+}
 
 function initGitRepo(dir: string): void {
   execFileSync("git", ["init", "-q"], { cwd: dir });
@@ -325,6 +344,168 @@ describe("runRemove", () => {
       } finally {
         rmSync(repoDir, { recursive: true, force: true });
       }
+    });
+  });
+
+  describe("voice activation (settings.json.outputStyle)", () => {
+    it("removes outputStyle when it's exactly Argos", () => {
+      runInit();
+      const settingsPath = join(claudeDir, "settings.json");
+      expect((JSON.parse(readFileSync(settingsPath, "utf-8")) as { outputStyle: string }).outputStyle).toBe("Argos");
+
+      const report = runRemove({ apply: true });
+
+      expect(report.exitCode).toBe(0);
+      const row = report.rows.find((r) => r.path === "settings.json#outputStyle");
+      expect(row?.status).toBe("removed");
+      const settings = JSON.parse(readFileSync(settingsPath, "utf-8")) as { outputStyle?: string };
+      expect(settings.outputStyle).toBeUndefined();
+    });
+
+    it("never touches a foreign (non-Argos) outputStyle", () => {
+      runInit();
+      const settingsPath = join(claudeDir, "settings.json");
+      const settings = JSON.parse(readFileSync(settingsPath, "utf-8")) as Record<string, unknown>;
+      settings.outputStyle = "my-custom-voice";
+      writeFileSync(settingsPath, JSON.stringify(settings, null, 2), "utf-8");
+
+      const report = runRemove({ apply: true });
+
+      expect(report.exitCode).toBe(0);
+      const row = report.rows.find((r) => r.path === "settings.json#outputStyle");
+      expect(row).toBeUndefined();
+      const after = JSON.parse(readFileSync(settingsPath, "utf-8")) as { outputStyle: string };
+      expect(after.outputStyle).toBe("my-custom-voice");
+    });
+
+    it("preview mode reports would-remove and writes nothing", () => {
+      runInit();
+      const settingsPath = join(claudeDir, "settings.json");
+      const before = readFileSync(settingsPath, "utf-8");
+
+      const report = runRemove({ apply: false });
+
+      const row = report.rows.find((r) => r.path === "settings.json#outputStyle");
+      expect(row?.status).toBe("would-remove");
+      expect(readFileSync(settingsPath, "utf-8")).toBe(before);
+    });
+  });
+});
+
+describe("runRemoveInteractive", () => {
+  let claudeDir: string;
+  let argosHome: string;
+  const originalClaudeDir = process.env.CLAUDE_CONFIG_DIR;
+  const originalArgosHome = process.env.ARGOS_HOME;
+
+  beforeEach(() => {
+    claudeDir = mkdtempSync(join(tmpdir(), "argos-remove-interactive-claude-"));
+    argosHome = mkdtempSync(join(tmpdir(), "argos-remove-interactive-home-"));
+    process.env.CLAUDE_CONFIG_DIR = claudeDir;
+    process.env.ARGOS_HOME = argosHome;
+  });
+
+  afterEach(() => {
+    rmSync(claudeDir, { recursive: true, force: true });
+    rmSync(argosHome, { recursive: true, force: true });
+    if (originalClaudeDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = originalClaudeDir;
+    if (originalArgosHome === undefined) delete process.env.ARGOS_HOME;
+    else process.env.ARGOS_HOME = originalArgosHome;
+  });
+
+  it("--yes / no-TTY is byte-identical to calling runRemove directly, even with a prompter injected", async () => {
+    runInit();
+    const prompter = makeFakePrompter([]); // never consulted
+
+    const viaInteractive = await runRemoveInteractive({ apply: true, yes: true, prompter });
+
+    runInit(); // reset state for a fair second comparison run
+    const viaDirect = runRemove({ apply: true });
+
+    expect(viaInteractive.exitCode).toBe(viaDirect.exitCode);
+    expect(viaInteractive.rows).toEqual(viaDirect.rows);
+  });
+
+  it("a plain preview (apply unset/false) never consults the prompter, even under a real TTY", async () => {
+    runInit();
+    let calls = 0;
+    const prompter: Prompter = {
+      ...makeFakePrompter([]),
+      text: async () => {
+        calls++;
+        return CANCEL as never;
+      },
+    };
+
+    const report = await runRemoveInteractive({ prompter });
+
+    expect(calls).toBe(0);
+    expect(report.exitCode).toBe(0);
+  });
+
+  describe("forced-interactive (stubbed TTY)", () => {
+    let originalStdoutIsTTY: PropertyDescriptor | undefined;
+    let originalStdinIsTTY: PropertyDescriptor | undefined;
+
+    beforeEach(() => {
+      originalStdoutIsTTY = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+      originalStdinIsTTY = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+      Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
+      Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+    });
+
+    afterEach(() => {
+      if (originalStdoutIsTTY) Object.defineProperty(process.stdout, "isTTY", originalStdoutIsTTY);
+      else delete (process.stdout as { isTTY?: boolean }).isTTY;
+      if (originalStdinIsTTY) Object.defineProperty(process.stdin, "isTTY", originalStdinIsTTY);
+      else delete (process.stdin as { isTTY?: boolean }).isTTY;
+    });
+
+    it("a wrong typed confirmation aborts --apply with zero writes", async () => {
+      runInit();
+      const before = snapshot(claudeDir);
+      const prompter = makeFakePrompter(["not-the-right-directory"]);
+
+      const report = await runRemoveInteractive({ apply: true, prompter });
+
+      expect(report.exitCode).toBe(1);
+      expect(report.rows).toEqual([{ path: "cancel", category: "scope-note", status: "info", detail: expect.any(String) }]);
+      expect(snapshot(claudeDir)).toEqual(before);
+    });
+
+    it("the correct typed confirmation proceeds with --apply", async () => {
+      runInit();
+      const prompter = makeFakePrompter([claudeDir]);
+
+      const report = await runRemoveInteractive({ apply: true, prompter });
+
+      expect(report.exitCode).toBe(0);
+      expect(report.rows.some((r) => r.status === "removed")).toBe(true);
+      expect(existsSync(join(claudeDir, "CLAUDE.md"))).toBe(false);
+    });
+
+    it("--purge requires a SECOND confirmation on top of the typed directory name", async () => {
+      runInit();
+      const prompter = makeFakePrompter([claudeDir, false]); // directory confirmed, purge declined
+
+      const report = await runRemoveInteractive({ apply: true, purge: true, prompter });
+
+      expect(report.exitCode).toBe(1);
+      expect(report.rows).toEqual([{ path: "cancel", category: "scope-note", status: "info", detail: expect.any(String) }]);
+      // Neither the engine nor ~/.argos was touched — the purge confirm gates the whole call.
+      expect(existsSync(join(claudeDir, "CLAUDE.md"))).toBe(true);
+    });
+
+    it("confirming both the directory name and the purge warning proceeds with --apply --purge", async () => {
+      runInit();
+      const prompter = makeFakePrompter([claudeDir, true]);
+
+      const report = await runRemoveInteractive({ apply: true, purge: true, prompter });
+
+      expect(report.exitCode).toBe(0);
+      expect(report.rows.some((r) => r.status === "removed")).toBe(true);
+      expect(existsSync(join(claudeDir, "CLAUDE.md"))).toBe(false);
     });
   });
 });

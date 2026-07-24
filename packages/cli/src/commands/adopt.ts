@@ -26,6 +26,7 @@ import { checkGitRepo, getRemoteOriginUrl, parseIdentityFromRemote } from "../li
 import { injectBlock, listBlocks } from "../lib/markers.js";
 import type { FileStatus } from "../lib/managed-files.js";
 import { readNaviorConfig } from "../lib/navori-import.js";
+import { isInteractive, clackPrompter, type Prompter } from "../lib/prompter.js";
 import { readCliVersion } from "../lib/version.js";
 import { linkRepo, loadRegistry, resolveWorkspaceForRepo } from "../lib/workspaces.js";
 
@@ -36,12 +37,63 @@ export const NO_GATE_PLACEHOLDER =
 export interface AdoptRow {
   field: string;
   value: string;
-  source: "imported" | "preserved" | "detected" | "default" | "info" | "warning" | "error";
+  source: "imported" | "preserved" | "detected" | "default" | "edited" | "info" | "warning" | "error";
+}
+
+export interface AdoptOverrides {
+  name?: string;
+  branchBase?: string;
+  qualityGateFast?: string;
+  workspace?: string;
+  identity?: string;
 }
 
 export interface AdoptOptions {
   cwd: string;
   refresh?: boolean;
+  /**
+   * Values the interactive layer collected by presenting the
+   * detected/imported defaults as editable (spec 0004 "argos adopt";
+   * Enter = accept the detected value). Additive — every field optional,
+   * and omitting `overrides` entirely reproduces today's non-interactive
+   * behavior byte-for-byte. Applied in place of the corresponding detected
+   * value, reported with row `source: "edited"`.
+   */
+  overrides?: AdoptOverrides;
+}
+
+/**
+ * Pure value selection: the interactive-layer override wins over the
+ * detected/imported value, when one was collected and it actually differs
+ * (Enter-accepted defaults come back as `undefined` from the wizard — see
+ * `runAdoptInteractive` — so they're a no-op here too). No side effects —
+ * safe to embed in an expression (e.g. an object spread) without hiding a
+ * mutation inside it.
+ */
+function resolveOverride<T extends string | undefined>(computed: T, override: T | undefined): T {
+  return override === undefined || override === computed ? computed : override;
+}
+
+/**
+ * The mutation half of applying an override: when `override` differs from
+ * `computed` (the value already pushed as `field`'s row), rewrites that
+ * row's `value`/`source` in place to reflect the edit (`source: "edited"`).
+ * Deliberately separate from `resolveOverride` and NEVER called embedded
+ * inside another expression (e.g. a spread) — always its own statement, so
+ * the side effect is visible at the call site, not hidden.
+ */
+function markRowEditedIfOverridden<T extends string | undefined>(
+  rows: AdoptRow[],
+  field: string,
+  computed: T,
+  override: T | undefined,
+): void {
+  if (override === undefined || override === computed) return;
+  const row = rows.find((r) => r.field === field);
+  if (row) {
+    row.value = override;
+    row.source = "edited";
+  }
 }
 
 export interface AdoptReport {
@@ -132,21 +184,27 @@ export function runAdopt(options: AdoptOptions): AdoptReport {
     nameSource = "default";
   }
   rows.push({ field: "name", value: name, source: nameSource });
+  markRowEditedIfOverridden(rows, "name", name, options.overrides?.name);
+  name = resolveOverride(name, options.overrides?.name);
 
   // workspace / branchBase / prTarget: existing > navori import > default (no detection exists for these)
-  const workspace = existing?.workspace ?? navori?.workspace;
+  let workspace: string | undefined = existing?.workspace ?? navori?.workspace;
   rows.push({
     field: "workspace",
     value: workspace ?? "(sin asignar)",
     source: existing?.workspace ? "preserved" : navori?.workspace ? "imported" : "default",
   });
+  markRowEditedIfOverridden(rows, "workspace", workspace, options.overrides?.workspace);
+  workspace = resolveOverride(workspace, options.overrides?.workspace);
 
-  const branchBase = existing?.branchBase ?? navori?.branchBase ?? "main";
+  let branchBase = existing?.branchBase ?? navori?.branchBase ?? "main";
   rows.push({
     field: "branchBase",
     value: branchBase,
     source: existing?.branchBase ? "preserved" : navori?.branchBase ? "imported" : "default",
   });
+  markRowEditedIfOverridden(rows, "branchBase", branchBase, options.overrides?.branchBase);
+  branchBase = resolveOverride(branchBase, options.overrides?.branchBase);
 
   const prTarget = existing?.prTarget ?? navori?.prTarget;
   if (prTarget) {
@@ -201,11 +259,15 @@ export function runAdopt(options: AdoptOptions): AdoptReport {
       });
     }
   }
+  markRowEditedIfOverridden(rows, "qualityGate.fast", qualityGate.fast, options.overrides?.qualityGateFast);
+  qualityGate = { ...qualityGate, fast: resolveOverride(qualityGate.fast, options.overrides?.qualityGateFast) };
 
   // identity: always freshly detected from the git remote.
   const remoteUrl = getRemoteOriginUrl(cwd);
-  const identity = remoteUrl ? (parseIdentityFromRemote(remoteUrl) ?? undefined) : undefined;
+  let identity = remoteUrl ? (parseIdentityFromRemote(remoteUrl) ?? undefined) : undefined;
   rows.push({ field: "identity", value: identity ?? "(no detectada)", source: "detected" });
+  markRowEditedIfOverridden(rows, "identity", identity, options.overrides?.identity);
+  identity = resolveOverride(identity, options.overrides?.identity);
 
   // skills: the 4 hardcoded motor skills plus whatever DEP_SKILL_MAP maps
   // from the repo's detected deps, deduped and in stable (MOTOR_SKILLS
@@ -298,6 +360,218 @@ export function runAdopt(options: AdoptOptions): AdoptReport {
   return { rows, configPath, fichaStatus, backupPath, exitCode };
 }
 
+interface AdoptDefaults {
+  name: string;
+  branchBase: string;
+  qualityGateFast: string;
+  identity?: string;
+  workspaceDefault?: string;
+  workspaceAmbiguousCandidates?: string[];
+  /** Human-readable description of the resolution chain that found `workspaceDefault`/the ambiguity, for display only. */
+  workspaceChain: string;
+}
+
+/**
+ * Read-only preview of the values `runAdopt` would detect/import, used only
+ * to seed the interactive wizard's editable prompts (spec 0004 "argos
+ * adopt": "Enter = aceptar lo detectado"). Deliberately duplicates a slice
+ * of `runAdopt`'s own detection logic instead of factoring it out from
+ * there — this function never writes anything (no config, no ficha, no
+ * registry), so it's safe to call before deciding what to write, but it must
+ * stay obviously side-effect-free rather than becoming a shared code path
+ * with the writing core.
+ */
+function computeAdoptDefaults(cwd: string): AdoptDefaults {
+  let existing: ArgosConfig | undefined;
+  if (hasConfig(cwd)) {
+    try {
+      existing = readConfig(cwd);
+    } catch {
+      existing = undefined;
+    }
+  }
+  const naviorResult = readNaviorConfig(cwd);
+  const navori = naviorResult.kind === "imported" ? naviorResult.data : undefined;
+  const pkg = readPackageJson(cwd);
+
+  const name = existing?.name ?? navori?.name ?? pkg?.name ?? basename(cwd);
+  const branchBase = existing?.branchBase ?? navori?.branchBase ?? "main";
+
+  const packageManager = detectPackageManager(cwd);
+  const importedFast = existing?.qualityGate?.fast || navori?.qualityGate?.fast;
+  const qualityGateFast =
+    importedFast || (pkg && packageManager ? buildQualityGateFast(pkg, packageManager) : "") || NO_GATE_PLACEHOLDER;
+
+  const remoteUrl = getRemoteOriginUrl(cwd);
+  const identity = remoteUrl ? (parseIdentityFromRemote(remoteUrl) ?? undefined) : undefined;
+
+  const configWorkspace = existing?.workspace ?? navori?.workspace;
+  let workspaceDefault: string | undefined = configWorkspace;
+  let workspaceAmbiguousCandidates: string[] | undefined;
+  let workspaceChain: string;
+  if (configWorkspace) {
+    workspaceChain = existing?.workspace ? "argos.config.json existente" : "importado de navori.config.json";
+  } else {
+    let registry: ReturnType<typeof loadRegistry>;
+    try {
+      registry = loadRegistry();
+    } catch {
+      registry = {};
+    }
+    const resolution = resolveWorkspaceForRepo(registry, { remoteUrl, repoPath: cwd });
+    if (resolution.kind === "resolved") {
+      workspaceDefault = resolution.name;
+      workspaceChain = `match rule (${resolution.source})`;
+    } else if (resolution.kind === "ambiguous") {
+      workspaceAmbiguousCandidates = resolution.candidates;
+      workspaceChain = `ambiguo (${resolution.source})`;
+    } else {
+      workspaceChain = "sin resolver";
+    }
+  }
+
+  return { name, branchBase, qualityGateFast, identity, workspaceDefault, workspaceAmbiguousCandidates, workspaceChain };
+}
+
+export interface AdoptInteractiveOptions extends AdoptOptions {
+  /** `--yes`: forces non-interactive behavior even under a real TTY. */
+  yes?: boolean;
+  /** Injectable for tests; defaults to the real `@clack/prompts`-backed prompter. */
+  prompter?: Prompter;
+}
+
+/**
+ * A cancelled wizard's report: identical shape to a run that touched
+ * nothing. `exitCode: 1` — a cancel is neither a successful write nor
+ * silently indistinguishable from one by exit code alone (matches
+ * `runWorkspaceLinkInteractive`'s convention for its own cancel paths).
+ */
+function cancelledAdoptReport(): AdoptReport {
+  return { rows: [], exitCode: 1 };
+}
+
+/**
+ * Interactive layer over `runAdopt` (spec 0004 F5 "argos adopt"). A pure
+ * additive wrapper — the core `runAdopt` never changes behavior or
+ * contract. Without a real TTY, or with `--yes`, this delegates to
+ * `runAdopt(options)` unchanged. With a TTY, and only when the underlying
+ * call would otherwise proceed to detection (repo exists, config doesn't
+ * already block without `--refresh`), it presents every detected/imported
+ * value as an editable prompt (Enter = accept detected), resolves an
+ * ambiguous workspace match via a `select` instead of erroring, and shows a
+ * final confirm before writing anything.
+ */
+export async function runAdoptInteractive(options: AdoptInteractiveOptions): Promise<AdoptReport> {
+  if (!isInteractive({ yes: options.yes })) {
+    return runAdopt(options);
+  }
+
+  const { cwd, refresh = false } = options;
+
+  // Same 2 early-exit guards `runAdopt` itself has — reproduce them here
+  // unprompted so the wizard never even starts when the underlying call is
+  // just going to error out anyway.
+  const gitCheck = checkGitRepo(cwd);
+  if (!gitCheck.isRepo) return runAdopt(options);
+  if (hasConfig(cwd) && !refresh) return runAdopt(options);
+
+  const prompter = options.prompter ?? clackPrompter;
+  const defaults = computeAdoptDefaults(cwd);
+
+  prompter.intro("argos adopt — revisión interactiva");
+
+  const name = await prompter.text({ message: "Nombre del repo", initialValue: defaults.name, defaultValue: defaults.name });
+  if (prompter.isCancel(name)) {
+    prompter.cancel("argos adopt cancelado — no se tocó nada.");
+    return cancelledAdoptReport();
+  }
+
+  const branchBase = await prompter.text({
+    message: "Rama base",
+    initialValue: defaults.branchBase,
+    defaultValue: defaults.branchBase,
+  });
+  if (prompter.isCancel(branchBase)) {
+    prompter.cancel("argos adopt cancelado — no se tocó nada.");
+    return cancelledAdoptReport();
+  }
+
+  const qualityGateFast = await prompter.text({
+    message: "Quality gate (fast)",
+    initialValue: defaults.qualityGateFast,
+    defaultValue: defaults.qualityGateFast,
+  });
+  if (prompter.isCancel(qualityGateFast)) {
+    prompter.cancel("argos adopt cancelado — no se tocó nada.");
+    return cancelledAdoptReport();
+  }
+
+  let workspace: string | undefined = defaults.workspaceDefault;
+  if (defaults.workspaceAmbiguousCandidates) {
+    const chosen = await prompter.select<string>({
+      message: `Workspace ambiguo — resolución vía ${defaults.workspaceChain}. Elegí uno:`,
+      options: defaults.workspaceAmbiguousCandidates.map((c) => ({ value: c })),
+    });
+    if (prompter.isCancel(chosen)) {
+      prompter.cancel("argos adopt cancelado — no se tocó nada.");
+      return cancelledAdoptReport();
+    }
+    workspace = chosen;
+  } else {
+    const edited = await prompter.text({
+      message: `Workspace (resuelto vía: ${defaults.workspaceChain})`,
+      initialValue: workspace ?? "",
+      defaultValue: workspace ?? "",
+    });
+    if (prompter.isCancel(edited)) {
+      prompter.cancel("argos adopt cancelado — no se tocó nada.");
+      return cancelledAdoptReport();
+    }
+    workspace = edited || undefined;
+  }
+
+  const identity = await prompter.text({
+    message: "Identidad",
+    initialValue: defaults.identity ?? "",
+    defaultValue: defaults.identity ?? "",
+  });
+  if (prompter.isCancel(identity)) {
+    prompter.cancel("argos adopt cancelado — no se tocó nada.");
+    return cancelledAdoptReport();
+  }
+
+  prompter.note(
+    [
+      `nombre: ${name}`,
+      `branchBase: ${branchBase}`,
+      `qualityGate.fast: ${qualityGateFast}`,
+      `workspace: ${workspace ?? "(sin asignar)"}`,
+      `identity: ${identity || "(no detectada)"}`,
+    ].join("\n"),
+    "Resumen (config + ficha)",
+  );
+
+  const proceed = await prompter.confirm({ message: "¿Escribir argos.config.json y la ficha?", initialValue: true });
+  if (prompter.isCancel(proceed) || !proceed) {
+    prompter.cancel("argos adopt cancelado — no se tocó nada.");
+    return cancelledAdoptReport();
+  }
+
+  const report = runAdopt({
+    cwd,
+    refresh,
+    overrides: {
+      name: name || undefined,
+      branchBase: branchBase || undefined,
+      qualityGateFast: qualityGateFast || undefined,
+      workspace,
+      identity: identity || undefined,
+    },
+  });
+  prompter.outro(`argos.config.json escrito en ${report.configPath}`);
+  return report;
+}
+
 export const adoptCommand = defineCommand({
   meta: {
     name: "adopt",
@@ -309,9 +583,18 @@ export const adoptCommand = defineCommand({
       default: false,
       description: "Regenera argos.config.json y la ficha aunque ya existan.",
     },
+    yes: {
+      type: "boolean",
+      default: false,
+      description: "Fuerza modo no interactivo aunque haya una TTY real (defaults + flags, sin wizard).",
+    },
   },
-  run({ args }) {
-    const report = runAdopt({ cwd: process.cwd(), refresh: Boolean(args.refresh) });
+  async run({ args }) {
+    const report = await runAdoptInteractive({
+      cwd: process.cwd(),
+      refresh: Boolean(args.refresh),
+      yes: Boolean(args.yes),
+    });
 
     if (report.error) {
       console.error(pc.red(report.error));

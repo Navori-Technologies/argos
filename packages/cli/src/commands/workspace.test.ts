@@ -4,8 +4,27 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writeConfig } from "../lib/config.js";
+import type { Prompter } from "../lib/prompter.js";
 import { loadRegistry, saveRegistry, type WorkspaceRegistry } from "../lib/workspaces.js";
-import { runWorkspaceAgents, runWorkspaceLink, runWorkspaceShow } from "./workspace.js";
+import { runWorkspaceAgents, runWorkspaceLink, runWorkspaceLinkInteractive, runWorkspaceShow } from "./workspace.js";
+
+const CANCEL = Symbol("cancel");
+
+/** Same trivial injectable fake as init.test.ts — see its doc comment. */
+function makeFakePrompter(answers: unknown[]): Prompter {
+  let i = 0;
+  const next = () => answers[i++];
+  return {
+    select: async () => next() as never,
+    confirm: async () => next() as never,
+    text: async () => next() as never,
+    isCancel: (value: unknown): value is symbol => value === CANCEL,
+    cancel: () => {},
+    note: () => {},
+    intro: () => {},
+    outro: () => {},
+  };
+}
 
 function initGitRepo(dir: string, remoteUrl?: string): void {
   execFileSync("git", ["init", "-q"], { cwd: dir });
@@ -126,6 +145,118 @@ describe("commands/workspace", () => {
 
       expect(report.exitCode).toBe(1);
       expect(report.ambiguousCandidates?.sort()).toEqual(["a", "b"]);
+    });
+
+    it("reports a structured collision object alongside the error string on a name collision", () => {
+      initGitRepo(repoDir, "git@github.com:bonum/my-repo.git");
+      writeConfig(repoDir, { name: "my-repo", qualityGate: { fast: "true" } });
+      const otherRepoDir = mkdtempSync(join(tmpdir(), "argos-ws-cmd-other-"));
+      try {
+        const registry: WorkspaceRegistry = {
+          bonum: { match: { remotes: [], paths: [] }, repos: [{ name: "my-repo", path: otherRepoDir }] },
+        };
+        saveRegistry(registry);
+
+        const report = runWorkspaceLink({ cwd: repoDir, explicit: "bonum" });
+
+        expect(report.exitCode).toBe(1);
+        expect(report.collision).toBeDefined();
+        expect(report.collision?.workspaceName).toBe("bonum");
+        expect(report.collision?.repoName).toBe("my-repo");
+        expect(report.collision?.newPath.endsWith(repoDir.replace(/^\/private/, ""))).toBe(true);
+      } finally {
+        rmSync(otherRepoDir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  describe("runWorkspaceLinkInteractive", () => {
+    it("--yes / no-TTY is byte-identical to calling runWorkspaceLink directly, even with a prompter injected", async () => {
+      initGitRepo(repoDir, "git@github.com:bonum/my-repo.git");
+      writeConfig(repoDir, { name: "my-repo", qualityGate: { fast: "true" } });
+      const prompter = makeFakePrompter([]); // never consulted — no real TTY in this test runner
+
+      const viaInteractive = await runWorkspaceLinkInteractive({ cwd: repoDir, prompter });
+      const viaDirect = runWorkspaceLink({ cwd: repoDir });
+
+      expect(viaInteractive.exitCode).toBe(viaDirect.exitCode);
+      expect(viaInteractive).toEqual(viaDirect);
+    });
+
+    describe("forced-interactive (stubbed TTY)", () => {
+      let originalStdoutIsTTY: PropertyDescriptor | undefined;
+      let originalStdinIsTTY: PropertyDescriptor | undefined;
+
+      beforeEach(() => {
+        originalStdoutIsTTY = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+        originalStdinIsTTY = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+        Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
+        Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+      });
+
+      afterEach(() => {
+        if (originalStdoutIsTTY) Object.defineProperty(process.stdout, "isTTY", originalStdoutIsTTY);
+        else delete (process.stdout as { isTTY?: boolean }).isTTY;
+        if (originalStdinIsTTY) Object.defineProperty(process.stdin, "isTTY", originalStdinIsTTY);
+        else delete (process.stdin as { isTTY?: boolean }).isTTY;
+      });
+
+      it("resolves an ambiguous match via select instead of erroring", async () => {
+        initGitRepo(repoDir, "git@github.com:bonum/my-repo.git");
+        writeConfig(repoDir, { name: "my-repo", qualityGate: { fast: "true" } });
+        const registry: WorkspaceRegistry = {
+          a: { match: { remotes: ["bonum"], paths: [] }, repos: [] },
+          b: { match: { remotes: ["bonum"], paths: [] }, repos: [] },
+        };
+        saveRegistry(registry);
+        const prompter = makeFakePrompter(["b"]); // select candidate "b"
+
+        const report = await runWorkspaceLinkInteractive({ cwd: repoDir, prompter });
+
+        expect(report.exitCode).toBe(0);
+        expect(report.workspaceName).toBe("b");
+      });
+
+      it("collision → overwrite branch: proceeds with force after confirming", async () => {
+        initGitRepo(repoDir, "git@github.com:bonum/my-repo.git");
+        writeConfig(repoDir, { name: "my-repo", qualityGate: { fast: "true" } });
+        const otherRepoDir = mkdtempSync(join(tmpdir(), "argos-ws-cmd-other-"));
+        try {
+          const registry: WorkspaceRegistry = {
+            bonum: { match: { remotes: [], paths: [] }, repos: [{ name: "my-repo", path: otherRepoDir }] },
+          };
+          saveRegistry(registry);
+          const prompter = makeFakePrompter([true]); // confirm overwrite
+
+          const report = await runWorkspaceLinkInteractive({ cwd: repoDir, explicit: "bonum", prompter });
+
+          expect(report.exitCode).toBe(0);
+          expect(report.action).toBe("updated-path");
+        } finally {
+          rmSync(otherRepoDir, { recursive: true, force: true });
+        }
+      });
+
+      it("collision → cancel branch: leaves the registry untouched", async () => {
+        initGitRepo(repoDir, "git@github.com:bonum/my-repo.git");
+        writeConfig(repoDir, { name: "my-repo", qualityGate: { fast: "true" } });
+        const otherRepoDir = mkdtempSync(join(tmpdir(), "argos-ws-cmd-other-"));
+        try {
+          const registry: WorkspaceRegistry = {
+            bonum: { match: { remotes: [], paths: [] }, repos: [{ name: "my-repo", path: otherRepoDir }] },
+          };
+          saveRegistry(registry);
+          const prompter = makeFakePrompter([false]); // decline overwrite
+
+          const report = await runWorkspaceLinkInteractive({ cwd: repoDir, explicit: "bonum", prompter });
+
+          expect(report.exitCode).toBe(1);
+          const after = loadRegistry();
+          expect(after.bonum?.repos[0]?.path).toBe(otherRepoDir);
+        } finally {
+          rmSync(otherRepoDir, { recursive: true, force: true });
+        }
+      });
     });
   });
 

@@ -4,8 +4,49 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { readConfig } from "../lib/config.js";
+import type { Prompter } from "../lib/prompter.js";
 import { loadRegistry, saveRegistry, type WorkspaceRegistry } from "../lib/workspaces.js";
-import { NO_GATE_PLACEHOLDER, runAdopt } from "./adopt.js";
+import { NO_GATE_PLACEHOLDER, runAdopt, runAdoptInteractive } from "./adopt.js";
+
+const CANCEL = Symbol("cancel");
+
+/** Same trivial injectable fake as init.test.ts — see its doc comment. */
+function makeFakePrompter(answers: unknown[]): Prompter {
+  let i = 0;
+  const next = () => answers[i++];
+  return {
+    select: async () => next() as never,
+    confirm: async () => next() as never,
+    text: async () => next() as never,
+    isCancel: (value: unknown): value is symbol => value === CANCEL,
+    cancel: () => {},
+    note: () => {},
+    intro: () => {},
+    outro: () => {},
+  };
+}
+
+/**
+ * A prompter that always echoes back whatever `initialValue`/`defaultValue`
+ * it was shown (accepting every field's detected default, exactly as if a
+ * human had pressed Enter through every prompt) and always confirms.
+ * Driving the wizard through this proves `computeAdoptDefaults`'s preview
+ * values are exactly what `runAdopt` itself would detect and write — a
+ * parity check between the wizard's preview and the writing core, without
+ * needing to export `computeAdoptDefaults` as a public seam.
+ */
+function makeAutoAcceptPrompter(): Prompter {
+  return {
+    select: async (opts) => (opts.initialValue ?? opts.options[0]?.value) as never,
+    confirm: async () => true,
+    text: async (opts) => opts.initialValue ?? opts.defaultValue ?? "",
+    isCancel: (value: unknown): value is symbol => value === CANCEL,
+    cancel: () => {},
+    note: () => {},
+    intro: () => {},
+    outro: () => {},
+  };
+}
 
 function initGitRepo(dir: string, remoteUrl?: string): void {
   execFileSync("git", ["init", "-q"], { cwd: dir });
@@ -329,4 +370,135 @@ describe("runAdopt", () => {
       }
     },
   );
+});
+
+describe("runAdoptInteractive", () => {
+  let repoDir: string;
+  let argosHome: string;
+  const originalArgosHome = process.env.ARGOS_HOME;
+
+  beforeEach(() => {
+    repoDir = mkdtempSync(join(tmpdir(), "argos-adopt-interactive-"));
+    argosHome = mkdtempSync(join(tmpdir(), "argos-adopt-interactive-home-"));
+    process.env.ARGOS_HOME = argosHome;
+  });
+
+  afterEach(() => {
+    rmSync(repoDir, { recursive: true, force: true });
+    rmSync(argosHome, { recursive: true, force: true });
+    if (originalArgosHome === undefined) delete process.env.ARGOS_HOME;
+    else process.env.ARGOS_HOME = originalArgosHome;
+  });
+
+  it("--yes / no-TTY is byte-identical to calling runAdopt directly, even with a prompter injected", async () => {
+    initGitRepo(repoDir, "git@github.com:bonum/my-repo.git");
+    const prompter = makeFakePrompter([]); // never consulted
+
+    const viaInteractive = await runAdoptInteractive({ cwd: repoDir, yes: true, prompter });
+    const configAfterInteractive = readConfig(repoDir);
+
+    rmSync(join(repoDir, "argos.config.json"), { force: true });
+    rmSync(join(repoDir, "CLAUDE.md"), { force: true });
+    const viaDirect = runAdopt({ cwd: repoDir });
+
+    expect(viaInteractive.exitCode).toBe(viaDirect.exitCode);
+    expect(viaInteractive.rows).toEqual(viaDirect.rows);
+    expect(configAfterInteractive.name).toBe(readConfig(repoDir).name);
+  });
+
+  describe("forced-interactive (stubbed TTY)", () => {
+    let originalStdoutIsTTY: PropertyDescriptor | undefined;
+    let originalStdinIsTTY: PropertyDescriptor | undefined;
+
+    beforeEach(() => {
+      originalStdoutIsTTY = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+      originalStdinIsTTY = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+      Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
+      Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+    });
+
+    afterEach(() => {
+      if (originalStdoutIsTTY) Object.defineProperty(process.stdout, "isTTY", originalStdoutIsTTY);
+      else delete (process.stdout as { isTTY?: boolean }).isTTY;
+      if (originalStdinIsTTY) Object.defineProperty(process.stdin, "isTTY", originalStdinIsTTY);
+      else delete (process.stdin as { isTTY?: boolean }).isTTY;
+    });
+
+    it("editing the detected name away from its default is reflected in the written config, with row source 'edited'", async () => {
+      initGitRepo(repoDir, "git@github.com:bonum/my-repo.git");
+      const prompter = makeFakePrompter([
+        "my-edited-name", // name (edited away from the detected default)
+        "main", // branchBase (accepted)
+        NO_GATE_PLACEHOLDER, // qualityGate.fast (accepted — no scripts detected)
+        "", // workspace (accepted — none resolved)
+        "", // identity (accepted — none detected without a package.json)
+        true, // final confirm
+      ]);
+
+      const report = await runAdoptInteractive({ cwd: repoDir, prompter });
+
+      expect(report.exitCode).toBe(0);
+      expect(readConfig(repoDir).name).toBe("my-edited-name");
+      const nameRow = report.rows.find((r) => r.field === "name");
+      expect(nameRow?.source).toBe("edited");
+      expect(nameRow?.value).toBe("my-edited-name");
+    });
+
+    it("parity: accepting every wizard default (Enter-through) writes exactly what a plain runAdopt call would", async () => {
+      initGitRepo(repoDir, "git@github.com:bonum/my-repo.git");
+      writeFileSync(
+        join(repoDir, "package.json"),
+        JSON.stringify({
+          name: "pkg-name",
+          scripts: { lint: "eslint .", typecheck: "tsc --noEmit", test: "vitest run" },
+        }),
+        "utf-8",
+      );
+
+      const viaInteractive = await runAdoptInteractive({ cwd: repoDir, prompter: makeAutoAcceptPrompter() });
+
+      rmSync(join(repoDir, "argos.config.json"), { force: true });
+      rmSync(join(repoDir, "CLAUDE.md"), { force: true });
+      const viaDirect = runAdopt({ cwd: repoDir });
+
+      expect(viaInteractive.exitCode).toBe(viaDirect.exitCode);
+      expect(viaInteractive.rows).toEqual(viaDirect.rows);
+    });
+
+    it("resolves an ambiguous workspace match via select instead of erroring", async () => {
+      initGitRepo(repoDir, "git@github.com:bonum/my-repo.git");
+      const registry: WorkspaceRegistry = {
+        a: { match: { remotes: ["bonum"], paths: [] }, repos: [] },
+        b: { match: { remotes: ["bonum"], paths: [] }, repos: [] },
+      };
+      saveRegistry(registry);
+
+      const prompter = makeFakePrompter([
+        "repo-name", // name
+        "main", // branchBase
+        NO_GATE_PLACEHOLDER, // qualityGate.fast
+        "a", // workspace select (chosen candidate)
+        "", // identity
+        true, // final confirm
+      ]);
+
+      const report = await runAdoptInteractive({ cwd: repoDir, prompter });
+
+      expect(report.exitCode).toBe(0);
+      expect(readConfig(repoDir).workspace).toBe("a");
+      const linkRow = report.rows.find((r) => r.field === "workspace.link");
+      expect(linkRow?.value).toContain("workspace 'a'");
+    });
+
+    it("cancelling at any step touches nothing on disk", async () => {
+      initGitRepo(repoDir, "git@github.com:bonum/my-repo.git");
+      const prompter = makeFakePrompter([CANCEL]); // cancel right at the name prompt
+
+      const report = await runAdoptInteractive({ cwd: repoDir, prompter });
+
+      expect(report.exitCode).toBe(1);
+      expect(report.rows).toEqual([]);
+      expect(readdirSync(repoDir).includes("argos.config.json")).toBe(false);
+    });
+  });
 });
