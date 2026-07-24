@@ -63,7 +63,86 @@ describe("runAdopt", () => {
     expect(config.stack?.libs).toContain("zod");
     expect(config.qualityGate.fast).toBe("pnpm lint && pnpm test");
     expect(config.identity).toBe("github.com-bonum");
+    // react + zod deps map to react-19 + zod-4, appended after the 4 core motor skills.
+    expect(config.skills).toEqual([
+      "verify-before-done",
+      "review-diff",
+      "pr-create",
+      "loop-back-debug",
+      "react-19",
+      "zod-4",
+    ]);
+  });
+
+  it("skills field: next+zod+tailwind repo maps to nextjs-15, react-19, zod-4, tailwind-4 plus the 4 core skills", () => {
+    initGitRepo(repoDir);
+    writeFileSync(
+      join(repoDir, "package.json"),
+      JSON.stringify({
+        name: "my-repo",
+        dependencies: { next: "^14.0.0", react: "^18.0.0", zod: "^3.0.0", tailwindcss: "^4.0.0" },
+      }),
+      "utf-8",
+    );
+
+    const report = runAdopt({ cwd: repoDir });
+
+    expect(report.exitCode).toBe(0);
+    const config = readConfig(repoDir);
+    // Order follows DEP_SKILL_MAP declaration order (tailwindcss before zod), not the order deps appear in package.json.
+    expect(config.skills).toEqual([
+      "verify-before-done",
+      "review-diff",
+      "pr-create",
+      "loop-back-debug",
+      "nextjs-15",
+      "react-19",
+      "tailwind-4",
+      "zod-4",
+    ]);
+    // react-19 appears once even though both the `next` and `react` DEP_SKILL_MAP entries could match.
+    expect(config.skills.filter((s) => s === "react-19")).toHaveLength(1);
+  });
+
+  it("skills field: a repo with no mapped deps keeps exactly the 4 core motor skills", () => {
+    initGitRepo(repoDir);
+    writeFileSync(join(repoDir, "package.json"), JSON.stringify({ name: "my-repo" }), "utf-8");
+
+    const report = runAdopt({ cwd: repoDir });
+
+    expect(report.exitCode).toBe(0);
+    const config = readConfig(repoDir);
     expect(config.skills).toEqual(["verify-before-done", "review-diff", "pr-create", "loop-back-debug"]);
+  });
+
+  it("--refresh regenerates the skills field when deps change (e.g. a lib gets added)", () => {
+    initGitRepo(repoDir);
+    writeFileSync(join(repoDir, "package.json"), JSON.stringify({ name: "repo-a", scripts: {} }), "utf-8");
+    const first = runAdopt({ cwd: repoDir });
+    expect(readConfig(repoDir).skills).toEqual([
+      "verify-before-done",
+      "review-diff",
+      "pr-create",
+      "loop-back-debug",
+    ]);
+    expect(first.exitCode).toBe(0);
+
+    writeFileSync(
+      join(repoDir, "package.json"),
+      JSON.stringify({ name: "repo-a", scripts: {}, dependencies: { axios: "^1.0.0", stripe: "^14.0.0" } }),
+      "utf-8",
+    );
+    const refreshed = runAdopt({ cwd: repoDir, refresh: true });
+
+    expect(refreshed.exitCode).toBe(0);
+    expect(readConfig(repoDir).skills).toEqual([
+      "verify-before-done",
+      "review-diff",
+      "pr-create",
+      "loop-back-debug",
+      "axios",
+      "stripe",
+    ]);
   });
 
   it("imports base values from navori.config.json when present", () => {

@@ -15,6 +15,7 @@ import {
   buildQualityGateFast,
   detectFramework,
   detectLibs,
+  detectMappedSkills,
   detectPackageManager,
   MOTOR_SKILLS,
   readPackageJson,
@@ -206,8 +207,12 @@ export function runAdopt(options: AdoptOptions): AdoptReport {
   const identity = remoteUrl ? (parseIdentityFromRemote(remoteUrl) ?? undefined) : undefined;
   rows.push({ field: "identity", value: identity ?? "(no detectada)", source: "detected" });
 
-  // skills: always the 4 hardcoded motor skills.
-  rows.push({ field: "skills", value: MOTOR_SKILLS.join(", "), source: "detected" });
+  // skills: the 4 hardcoded motor skills plus whatever DEP_SKILL_MAP maps
+  // from the repo's detected deps, deduped and in stable (MOTOR_SKILLS
+  // first, then DEP_SKILL_MAP declaration order) order.
+  const mappedSkills = pkg ? detectMappedSkills(pkg) : [];
+  const skills = [...MOTOR_SKILLS, ...mappedSkills.filter((id) => !MOTOR_SKILLS.includes(id))];
+  rows.push({ field: "skills", value: skills.join(", "), source: "detected" });
 
   const configInput: ArgosConfigInput = {
     name,
@@ -219,7 +224,7 @@ export function runAdopt(options: AdoptOptions): AdoptReport {
     project,
     identity,
     stack: { framework, packageManager, libs },
-    skills: [...MOTOR_SKILLS],
+    skills,
   };
 
   let configPath: string | undefined;

@@ -25,7 +25,14 @@ export function buildFichaContent(config: ArgosConfig): string {
     lines.push(`- Áreas críticas: ${areas.join(", ")}`);
   }
 
-  lines.push(`- Skills aplicables: ${config.skills.join(", ")}`);
+  // Above ~6 skills a single comma-joined line gets unbounded (289 chars
+  // observed with 18 libs) — wrap as indented sub-lines instead.
+  if (config.skills.length > 6) {
+    lines.push("- Skills aplicables:");
+    for (const skill of config.skills) lines.push(`  - ${skill}`);
+  } else {
+    lines.push(`- Skills aplicables: ${config.skills.join(", ")}`);
+  }
   lines.push("");
   lines.push("Datos de argos.config.json — regenerar con `argos adopt --refresh`.");
 
