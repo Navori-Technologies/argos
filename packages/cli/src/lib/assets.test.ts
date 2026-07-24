@@ -30,10 +30,11 @@ describe("assets.ts", () => {
     rmSync(packageRoot, { recursive: true, force: true });
   });
 
-  it("MANAGED_BLOCK_IDS has the 5 expected block ids in rendering order", () => {
+  it("MANAGED_BLOCK_IDS has the 6 expected block ids in rendering order", () => {
     expect(MANAGED_BLOCK_IDS).toEqual([
       "identidad",
       "formato-respuesta",
+      "disciplina-skills",
       "aterrizaje",
       "orquestacion",
       "operaciones-seguras",

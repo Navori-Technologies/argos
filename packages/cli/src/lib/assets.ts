@@ -3,13 +3,16 @@ import { join } from "node:path";
 import { resolvePackageRoot } from "./package-root.js";
 
 /**
- * Ordered ids of the 5 managed CLAUDE.md blocks. Order defines the order the
+ * Ordered ids of the 6 managed CLAUDE.md blocks. Order defines the order the
  * blocks appear in the rendered file. Ids are the basenames (without `.md`)
- * of `assets/managed/*.md`.
+ * of `assets/managed/*.md`. This array is the single shared source for both
+ * `init.ts` (installs/injects each block, in this order) and `doctor.ts`
+ * (audits presence/version drift for each block) — never duplicate it.
  */
 export const MANAGED_BLOCK_IDS = [
   "identidad",
   "formato-respuesta",
+  "disciplina-skills",
   "aterrizaje",
   "orquestacion",
   "operaciones-seguras",

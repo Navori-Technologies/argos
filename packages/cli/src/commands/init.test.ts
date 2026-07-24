@@ -91,7 +91,14 @@ describe("runInit", () => {
     expect(existsSync(join(argosHome, "global.json"))).toBe(true);
 
     const claudeMd = readFileSync(join(claudeDir, "CLAUDE.md"), "utf-8");
-    for (const id of ["identidad", "formato-respuesta", "aterrizaje", "orquestacion", "operaciones-seguras"]) {
+    for (const id of [
+      "identidad",
+      "formato-respuesta",
+      "disciplina-skills",
+      "aterrizaje",
+      "orquestacion",
+      "operaciones-seguras",
+    ]) {
       expect(claudeMd).toContain(`id="${id}"`);
     }
 
@@ -101,6 +108,24 @@ describe("runInit", () => {
     };
     expect(globalJson.language).toBe("es");
     expect(typeof globalJson.version).toBe("string");
+  });
+
+  it("installs the disciplina-skills block ordered after formato-respuesta and before aterrizaje", () => {
+    runInit();
+
+    const claudeMd = readFileSync(join(claudeDir, "CLAUDE.md"), "utf-8");
+    expect(claudeMd).toContain('id="disciplina-skills"');
+    expect(claudeMd).toContain("Disparo de skills (disciplina obligatoria)");
+
+    const formatoIdx = claudeMd.indexOf('id="formato-respuesta"');
+    const disciplinaIdx = claudeMd.indexOf('id="disciplina-skills"');
+    const aterrizajeIdx = claudeMd.indexOf('id="aterrizaje"');
+
+    expect(formatoIdx).toBeGreaterThan(-1);
+    expect(disciplinaIdx).toBeGreaterThan(-1);
+    expect(aterrizajeIdx).toBeGreaterThan(-1);
+    expect(disciplinaIdx).toBeGreaterThan(formatoIdx);
+    expect(aterrizajeIdx).toBeGreaterThan(disciplinaIdx);
   });
 
   it("respects the --language flag in global.json", () => {
@@ -130,7 +155,7 @@ describe("runInit", () => {
     expect(readFileSync(foreignPath, "utf-8")).toBe(foreignContent);
   });
 
-  it("preserves foreign CLAUDE.md content byte-exact outside the 5 managed blocks", () => {
+  it("preserves foreign CLAUDE.md content byte-exact outside the managed blocks", () => {
     mkdirSync(claudeDir, { recursive: true });
     const foreignContent = "# My global notes\n\nHand-written, do not touch.\n";
     writeFileSync(join(claudeDir, "CLAUDE.md"), foreignContent, "utf-8");

@@ -63,6 +63,23 @@ describe("runDoctor", () => {
     expect(report.findings.some((f) => f.level === "warning" && /identidad/.test(f.message))).toBe(true);
   });
 
+  it("reports an outdated disciplina-skills block the same way it reports every other managed block", () => {
+    runInit();
+    const claudeMdPath = join(claudeDir, "CLAUDE.md");
+    let claudeMd = readFileSync(claudeMdPath, "utf-8");
+    claudeMd = injectBlock(claudeMd, "disciplina-skills", "-1", "stale content");
+    writeFileSync(claudeMdPath, claudeMd, "utf-8");
+
+    const report = runDoctor({ cwd: nonRepoDir });
+
+    expect(report.exitCode).toBe(1);
+    expect(
+      report.findings.some(
+        (f) => f.level === "warning" && /disciplina-skills/.test(f.message) && /argos init/.test(f.message),
+      ),
+    ).toBe(true);
+  });
+
   it("reports ficha drift when argos.config.json changes without --refresh", () => {
     initGitRepo(nonRepoDir);
     runInit();
@@ -189,6 +206,26 @@ describe("runDoctor", () => {
     expect(report.exitCode).toBe(1);
     expect(
       report.findings.some((f) => f.level === "warning" && /placeholder/i.test(f.message) && /adopt --refresh/.test(f.message)),
+    ).toBe(true);
+  });
+
+  it("flags a foreign skill file blocking the bundled motor version, with the blocked-version message", () => {
+    runInit();
+    const skillMdPath = join(claudeDir, "skills", "angular", "SKILL.md");
+    const foreignContent = "---\nname: angular\n---\n\nMy own hand-written skill, no marker.\n";
+    writeFileSync(skillMdPath, foreignContent, "utf-8");
+
+    const report = runDoctor({ cwd: nonRepoDir });
+
+    const label = join("skills", "angular", "SKILL.md");
+    expect(
+      report.findings.some(
+        (f) =>
+          f.level === "info" &&
+          f.message.includes(`archivo ajeno en ${label}`) &&
+          /hay versión del motor disponible pero está bloqueada/.test(f.message) &&
+          /argos init/.test(f.message),
+      ),
     ).toBe(true);
   });
 

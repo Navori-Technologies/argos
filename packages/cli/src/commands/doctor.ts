@@ -109,7 +109,10 @@ function checkHookScripts(findings: DoctorFinding[], claudeDir: string, currentV
     if (findings.length > beforeCount) continue; // read error already reported by readFileSafe
 
     if (!hasArgosShellFileMarker(content)) {
-      findings.push({ level: "info", message: `hooks/${id}.sh existe pero es ajeno (sin marker argos:file).` });
+      findings.push({
+        level: "info",
+        message: `archivo ajeno en hooks/${id}.sh — hay versión del motor disponible pero está bloqueada; muévelo o bórralo y corre argos init para instalarla.`,
+      });
       continue;
     }
 
@@ -340,7 +343,10 @@ function checkMotor(findings: DoctorFinding[]): void {
     }
     const content = readFileSync(dest, "utf-8");
     if (!hasArgosFileMarker(content)) {
-      findings.push({ level: "info", message: `${label} existe pero es ajeno (sin marker argos:file).` });
+      findings.push({
+        level: "info",
+        message: `archivo ajeno en ${label} — hay versión del motor disponible pero está bloqueada; muévelo o bórralo y corre argos init para instalarla.`,
+      });
     }
   }
 

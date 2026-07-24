@@ -161,7 +161,7 @@ export function runInit(options: InitOptions = {}): InitReport {
     return { rows, summary: `backup falló — no se tocó nada (${detail}).`, exitCode: 1 };
   }
 
-  // 1. CLAUDE.md — 5 managed blocks, in order.
+  // 1. CLAUDE.md — MANAGED_BLOCK_IDS.length managed blocks, in order.
   const claudeMdPath = join(claudeDir, "CLAUDE.md");
   let claudeMd = existsSync(claudeMdPath) ? readFileSync(claudeMdPath, "utf-8") : "";
   const blockResults: { id: string; status: FileStatus }[] = [];
