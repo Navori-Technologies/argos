@@ -1,132 +1,169 @@
-# Spec 0001 — Arquitectura global-first
+# Spec 0001 — Argos: arquitectura global-first
 
 Estado: draft
 Fecha: 2026-07-24
 
+## Identidad
+
+- Nombre: **argos** (Argos Panoptes — el guardián de cien ojos: un motor
+  global, todos los repos a la vista).
+- Binario CLI: `argos`. Config por repo: `argos.config.json`. Estado de
+  máquina: `~/.argos/`. Markers managed: `<!-- argos:managed ... -->`.
+- Todo el namespace es propio: Argos coexiste en la misma máquina y los mismos
+  repos con el harness original (navori/Ulises) sin pisarse — cada herramienta
+  reclama solo sus bloques y su config.
+
 ## Contexto
 
-navori-global-harness es una versión propia del harness, divergente del diseño
-original (navori-harness, derivado del harness de Ulises). El original optimiza
-para equipos, multi-engine (Claude Code, Cursor, Copilot, AGENTS.md) y
-distribución del harness vía archivos commiteados en cada repo. Ese diseño paga
-costos que este proyecto no necesita:
+Argos es una versión propia del harness, divergente del original de Ulises
+(navori-harness). El original optimiza para equipos y multi-engine mediante
+render de contenido por repo; ese diseño paga costos estructurales:
 
-- Dos capas de contenido (global `~/.claude` + render por repo) que exigen un
-  sistema de scopes, gestión de colisiones entre capas y detección de drift.
-- Los mismos assets (agentes, skills, bloques) renderizados N veces: una por
-  repo, con placeholders resueltos en render-time. Actualizar el harness exige
-  re-renderizar la flota completa (`workspace render --apply`).
-- Duplicación de agentes: los 12 agentes de rol existen en `~/.claude/agents` y
-  en cada `.claude/agents` de cada repo, distinguidos solo por shadowing de cwd.
-- Ceremonia entre instalar y trabajar: `global init` + por repo `init` +
-  `render` + `workspace link` + sync continuo.
+- Dos capas de contenido (global `~/.claude` + render por repo) → sistema de
+  scopes, colisiones entre capas, detección de drift.
+- Los mismos assets renderizados N veces (una por repo); actualizar exige
+  re-renderizar la flota completa.
+- Duplicación de agentes (globales + por repo, distinguidos por shadowing).
+- Ceremonia entre instalar y trabajar: init global + init/render/link por repo
+  + sync continuo.
 
-Caso de uso real de este harness: un solo operador, Claude Code como único
-engine, sesiones locales y chat-first en VPS (OpenClaw, un agente por repo),
-repos propios y de Bonum separados por identidad git.
+Caso de uso primario: un operador, Claude Code como engine de trabajo,
+sesiones locales y chat-first en VPS (OpenClaw, un agente por repo), repos
+personales y de Bonum separados por identidad git.
 
 ## Principio
 
-**El harness global es el motor; el repo son datos.**
+**El motor es global; el repo son datos; el equipo recibe un compilado.**
 
-Todo el contenido ejecutable/instruccional vive UNA vez, a nivel usuario
+Todo el contenido ejecutable/instruccional vive UNA vez a nivel usuario
 (`~/.claude`): persona, bloques de CLAUDE.md, skills, agentes, hooks,
 orquestación. Cada repo aporta exclusivamente configuración declarativa
-(`navori.config.json`). Los skills, agentes y hooks resuelven esa config en
+(`argos.config.json`). Los skills, agentes y hooks resuelven esa config en
 **runtime** (leen el archivo del repo donde trabajan), no en render-time.
 
-Consecuencias directas:
+Consecuencias:
 
-- No hay render de contenido por repo → no hay scopes, ni colisiones entre
-  capas, ni drift, ni sweeps de sincronización de contenido.
-- Actualizar el harness = actualizar el paquete + `navori render` una vez por
-  máquina. Los 18 repos no se tocan.
+- No hay render de contenido por repo para operar → no hay scopes, ni
+  colisiones entre capas, ni sweeps de sincronización de contenido.
+- Actualizar = actualizar el paquete + `argos render` una vez por máquina.
 - Un agente/skill se define una vez y trabaja en cualquier repo.
+
+## Dos modos, un motor
+
+### Modo operador (default, global-first)
+
+El de arriba. Tus sesiones (locales o VPS) usan el motor de `~/.claude` +
+la config del repo. Nada del harness vive versionado en el repo salvo
+`argos.config.json`.
+
+### Modo equipo (`argos export`)
+
+Para repos donde un equipo sin Argos instalado necesita el harness, o donde se
+usan otros engines: `argos export` **compila** el motor + la config del repo en
+artefactos versionables — CLAUDE.md con gates resueltos, `.claude/` mínimo,
+`.cursor/rules/`, `.github/copilot-instructions.md`. Propiedades:
+
+- Es un build para terceros: las sesiones del operador NUNCA dependen del
+  export; siguen usando el motor global.
+- Los engines (Cursor/Copilot/AGENTS.md) dejan de ser arquitectura de primera
+  clase: son formatos de salida del export.
+- `argos doctor` compara versión del motor vs export commiteado y reporta
+  drift; `argos export --apply` regenera. Solo los repos que exportan entran a
+  ese sweep (opt-in explícito en la config).
+- El export lleva markers `argos:managed` con versión, igual que todo lo que
+  Argos escribe.
 
 ## Capas
 
 | Capa | Contenido | Se actualiza |
 |---|---|---|
 | Motor (`~/.claude`) | CLAUDE.md global, output-style, skills, agents, hooks, settings | con el paquete, 1 vez por máquina |
-| Datos (repo) | `navori.config.json` (+ CLAUDE.md delgado opcional con hechos del repo) | casi nunca; a mano o con `navori adopt` |
-| Registro (`~/.navori`) | workspaces (bonum / personal), selección global, backups | por comandos |
+| Datos (repo) | `argos.config.json` | casi nunca; `argos adopt` |
+| Export (repo, opt-in) | CLAUDE.md/.claude/.cursor/copilot compilados | `argos export --apply` cuando cambia el motor |
+| Registro (`~/.argos`) | workspaces (bonum / personal), selección, backups | por comandos |
 
 ## Componentes del motor
 
 1. **CLAUDE.md global (managed)**: identidad/idioma, formato de respuesta,
    aterrizaje en repos (detección de config, sugerir `adopt`, aviso de sesión
    no anclada), orquestación (tabla de escalado, paralelismo, lentes 4R,
-   presupuesto de delegación, tier por costo-beneficio-velocidad), operaciones
-   seguras, protocolo engram, ponytail.
-2. **Agentes** (`~/.claude/agents/`): el roster de roles (explorer, researcher,
+   presupuesto de delegación, tier por costo-beneficio-velocidad, agilizar con
+   subagentes por default), operaciones seguras, protocolo engram, ponytail.
+2. **Agentes** (`~/.claude/agents/`): roster de roles (explorer, researcher,
    implementer, reviewer, lentes 4R, ticket-audit, commit-pr-pilot, auditor).
-   Sus instrucciones referencian "el quality gate del repo (navori.config.json)"
-   — nunca un comando hardcodeado.
-3. **Skills** (`~/.claude/skills/`): pipeline de ticket (ticket-intake con fase
-   de aterrizaje, review-diff, verify-before-done, pr-create, loop-back-debug,
-   spec-bootstrap) + skills de oficio (judgment-day, chained-pr, branch-pr,
-   etc.). Todo skill que necesite datos del repo los lee de la config en
-   runtime.
-4. **Hooks globales parametrizados**: hooks user-level (settings.json global)
-   cuyo script localiza el `navori.config.json` del repo del cwd y ejecuta SU
-   quality gate / guardas. El repo no lleva hooks propios.
+   Referencian "el quality gate del repo (argos.config.json)" — nunca un
+   comando hardcodeado.
+3. **Skills** (`~/.claude/skills/`): pipeline de ticket (ticket-intake con
+   fase de aterrizaje, review-diff, verify-before-done, pr-create,
+   loop-back-debug, spec-bootstrap) + skills de oficio (judgment-day,
+   chained-pr, branch-pr, etc.). Datos del repo → de la config, en runtime.
+4. **Hooks globales parametrizados**: hooks user-level cuyo script localiza el
+   `argos.config.json` del repo del cwd y ejecuta SU quality gate / guardas.
+   El repo no lleva hooks propios (salvo vía export para el equipo).
 5. **Workspaces + flota OpenClaw**: registro machine-local con match rules por
-   remote/path; `navori workspace agents <ws>` genera un agente OpenClaw por
+   remote/path; `argos workspace agents <ws>` genera un agente OpenClaw por
    repo registrado.
 
-## navori.config.json (datos del repo)
+## argos.config.json (datos del repo)
 
 Esquema mínimo: `name`, `language`, `workspace`, `branchBase`, `prTarget`,
 `qualityGate { fast, full }`, `project { criticalAreas, legacyPaths }`,
-`identity` (alias git esperado — verifica la regla Bonum/personal). Sin
-presets, sin engines, sin selección de skills: eso es del motor.
+`identity` (alias git esperado — verifica la regla Bonum/personal),
+`export { engines: [...] }` (opt-in del modo equipo). Sin presets ni selección
+de skills: eso es del motor.
+
+## Coexistencia y migración desde navori-harness
+
+- Namespaces disjuntos (binario, config, markers, `~/.argos`): un repo puede
+  tener ambos harnesses sin conflicto; `argos doctor` reporta la convivencia.
+- `argos adopt` detecta un `navori.config.json` existente e **importa** sus
+  datos (name, quality gate, áreas críticas, workspace) — migración gratis.
 
 ## Flujo objetivo
 
 ```
-npm i -g navori-global          # una vez por máquina
-navori init                     # motor completo a ~/.claude (interactivo 1 vez)
+npm i -g argos-harness          # una vez por máquina
+argos init                      # motor completo a ~/.claude (interactivo 1 vez)
 # ... por repo:
 git clone <repo> && cd <repo>
-navori adopt                    # detecta stack + quality gate + identidad por
-                                # remote → escribe navori.config.json, linkea
+argos adopt                     # detecta stack + quality gate + identidad por
+                                # remote → escribe argos.config.json, linkea
                                 # workspace (match rules), sugiere agente OpenClaw
-# a trabajar — no hay paso 3
+# a trabajar — no hay paso 3. Equipo/multi-engine: argos export (opt-in).
 ```
 
-`adopt` es idempotente y el único comando per-repo. En VPS, el aterrizaje del
-CLAUDE.md global instruye al agente a correrlo cuando falta la config.
+## Qué se hereda de navori-harness (probado)
 
-## Qué se hereda de navori-harness (probado hoy)
-
-- Resolución genérica de placeholders a punteros de config (mecanismo
-  GLOBAL_SKILL_TEMPLATE_DEFAULTS) — acá se vuelve el default único.
+- Resolución genérica de placeholders a punteros de config — acá es el default
+  único del motor; el export usa la resolución concreta (render-time) del
+  mismo mecanismo.
 - Guard de archivos ajenos en `~/.claude` (skipped-foreign) y backups.
 - `workspace agents` (timeout, clasificación de duplicados, preview-first).
-- Markers managed para todo lo que el motor escribe en `~/.claude`.
-- Reglas de orquestación (incluida "agiliza con subagentes por default").
+- Markers managed con versión para todo lo que Argos escribe.
 
 ## Non-goals (v1)
 
-- Multi-engine (Cursor/Copilot/AGENTS.md): Claude Code only.
-- Distribución del harness vía archivos commiteados al repo del equipo.
-- Presets por stack y lib-skills auto-detectadas (el motor es genérico; los
-  hechos del stack caben en la config del repo).
+- Presets por stack y lib-skills auto-detectadas (los hechos del stack caben
+  en la config del repo).
 - i18n de assets (español neutro único).
+- Export a engines adicionales más allá de Cursor/Copilot/AGENTS.md.
 
 ## Tradeoffs aceptados
 
-- Resolución runtime: el modelo lee la config del repo en vez de recibir el
-  comando inline (costo en tokens y un salto de indirección por sesión).
-- Un teammate sin navori instalado no recibe nada del harness clonando el repo.
-- Hooks globales corren en todo repo con config; sin config, no hay gate
+- Resolución runtime en modo operador: el modelo lee la config del repo en vez
+  de recibir el comando inline (tokens + una indirección por sesión).
+- Modo equipo requiere el paso de export y su disciplina de regeneración
+  (acotada a repos opt-in, con doctor vigilando drift).
+- Hooks globales corren en todo repo con config; sin config no hay gate
   automático (el aterrizaje lo advierte).
 
 ## Fases
 
-1. **F1 — Motor mínimo**: `navori init` (CLAUDE.md global + persona + agentes +
-   skills core), `navori adopt`, `doctor`.
+1. **F1 — Motor mínimo**: `argos init` (CLAUDE.md global + persona + agentes +
+   skills core), `argos adopt` (con import de navori.config.json), `doctor`.
 2. **F2 — Hooks globales parametrizados** + workspaces con match rules +
    `workspace agents`.
-3. **F3 — Pipeline de ticket completo** (ticket-intake con aterrizaje integrado)
-   + migración desde navori-harness (script que lee configs existentes).
+3. **F3 — `argos export`** (modo equipo: CLAUDE.md/.claude/cursor/copilot) +
+   doctor de drift motor↔export.
+4. **F4 — Pipeline de ticket completo** (ticket-intake con aterrizaje
+   integrado) + migración asistida desde navori-harness.
