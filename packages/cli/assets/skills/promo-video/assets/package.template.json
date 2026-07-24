@@ -1,0 +1,22 @@
+{
+  "name": "APP_SLUG-promo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Remotion promotional video for the APP_NAME app",
+  "scripts": {
+    "studio": "remotion studio",
+    "render": "remotion render Promo out/promo.mp4"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.496",
+    "@remotion/google-fonts": "4.0.496",
+    "@remotion/transitions": "4.0.496",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "remotion": "4.0.496"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "typescript": "^5.6.0"
+  }
+}

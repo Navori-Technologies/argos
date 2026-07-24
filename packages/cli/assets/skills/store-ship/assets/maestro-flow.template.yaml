@@ -1,0 +1,27 @@
+# Screenshot flow — one per screenshot set. Run against a seeded demo account
+# on the device matrix in references/pipeline.md (never Expo Go).
+# Never hardcode credentials, even local seed ones — inject via -e:
+# maestro test store/flows/screenshots.yaml -e DEMO_PASSWORD=your-local-seed-password
+appId: com.example.app
+---
+- launchApp:
+    clearState: true
+# Launch-transition chrome can still be on screen right after launchApp —
+# wait before the app is considered ready, and again before any screenshot.
+- waitForAnimationToEnd
+- assertVisible: "LOGIN_SCREEN_MARKER"
+- tapOn: "EMAIL_FIELD_HINT"
+- inputText: "demo@example.com"
+- tapOn: "PASSWORD_FIELD_HINT"
+- inputText: "${DEMO_PASSWORD}"
+- tapOn: "LOGIN_CTA"
+- waitForAnimationToEnd
+# 1 — signature screen first: it becomes the store card image
+- takeScreenshot: store/screenshots/tmp/01-signature
+# 2..N — core loop, then differentiators
+- tapOn: "TAB_2"
+- waitForAnimationToEnd
+- takeScreenshot: store/screenshots/tmp/02-core-loop
+- tapOn: "TAB_3"
+- waitForAnimationToEnd
+- takeScreenshot: store/screenshots/tmp/03-differentiator

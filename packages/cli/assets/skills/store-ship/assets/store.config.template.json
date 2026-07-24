@@ -1,0 +1,28 @@
+{
+  "configVersion": 0,
+  "apple": {
+    "info": {
+      "es-MX": {
+        "title": "APP_NAME_MAX_30",
+        "subtitle": "VALUE_PROMISE_MAX_30",
+        "description": "FULL_DESCRIPTION_MAX_4000\n\nDerive from docs/product-definition.md: core promise first, then features as user benefits.",
+        "keywords": ["domain", "nouns", "users", "search", "max-100-chars-total"],
+        "promoText": "PROMO_MAX_170_EDITABLE_WITHOUT_NEW_BUILD",
+        "marketingUrl": "https://example.com",
+        "supportUrl": "https://example.com/support",
+        "privacyPolicyUrl": "https://example.com/privacy"
+      }
+    },
+    "categories": ["PRIMARY_CATEGORY"],
+    "review": {
+      "firstName": "REVIEWER_CONTACT_FIRST",
+      "lastName": "REVIEWER_CONTACT_LAST",
+      "email": "contact@example.com",
+      "phone": "+521234567890",
+      "demoUsername": "demo@example.com",
+      "demoPassword": "SET_VIA_SECRET_BEFORE_PUSH",
+      "demoRequired": true,
+      "notes": "Accounts are admin-created; use the demo login above."
+    }
+  }
+}
