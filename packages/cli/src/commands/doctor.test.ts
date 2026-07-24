@@ -4,7 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { readConfig, writeConfig } from "../lib/config.js";
+import { buildFichaContent, FICHA_BLOCK_ID } from "../lib/ficha.js";
 import { injectBlock } from "../lib/markers.js";
+import { readCliVersion } from "../lib/version.js";
 import { linkRepo, saveRegistry, type WorkspaceRegistry } from "../lib/workspaces.js";
 import { runAdopt } from "./adopt.js";
 import { runDoctor } from "./doctor.js";
@@ -364,5 +366,65 @@ describe("runDoctor", () => {
       // Restore the original path so afterEach's rmSync(nonRepoDir) still works.
       renameSync(relocatedDir, nonRepoDir);
     }
+  });
+
+  // --- dangling/unclosed markers -------------------------------------------
+
+  it("flags a dangling open marker (no matching close) in the global CLAUDE.md as an issue", () => {
+    runInit();
+    const claudeMdPath = join(claudeDir, "CLAUDE.md");
+    // Hand-crafted open marker with no matching close — crash residue or manual corruption.
+    const dangling = '<!-- argos:managed id="identidad" v="1.0.0" -->\nNever closed.\n';
+    writeFileSync(claudeMdPath, dangling, "utf-8");
+
+    const report = runDoctor({ cwd: nonRepoDir });
+
+    expect(report.exitCode).toBe(1);
+    expect(
+      report.findings.some((f) => f.level === "warning" && /huérfano/.test(f.message) && /identidad/.test(f.message)),
+    ).toBe(true);
+  });
+
+  it("flags a dangling open marker in the repo's ./CLAUDE.md as an issue", () => {
+    initGitRepo(nonRepoDir);
+    runInit();
+    runAdopt({ cwd: nonRepoDir });
+
+    const repoClaudeMdPath = join(nonRepoDir, "CLAUDE.md");
+    const claudeMd = readFileSync(repoClaudeMdPath, "utf-8");
+    writeFileSync(repoClaudeMdPath, `${claudeMd}\n<!-- argos:managed id="notas" v="1.0.0" -->\nNever closed.\n`, "utf-8");
+
+    const report = runDoctor({ cwd: nonRepoDir });
+
+    expect(report.exitCode).toBe(1);
+    expect(
+      report.findings.some((f) => f.level === "warning" && /huérfano/.test(f.message) && /notas/.test(f.message)),
+    ).toBe(true);
+  });
+
+  // --- ficha wrapping (F: line-wrap for >6 skills) -------------------------
+
+  it("does not false-positive ficha drift for a >6-skill ficha that renders as wrapped sub-lines", () => {
+    initGitRepo(nonRepoDir);
+    runInit();
+    runAdopt({ cwd: nonRepoDir });
+
+    const config = readConfig(nonRepoDir);
+    const manySkillsConfig = { ...config, skills: Array.from({ length: 18 }, (_, i) => `skill-${i}`) };
+    writeConfig(nonRepoDir, manySkillsConfig);
+
+    // Keep ./CLAUDE.md's ficha block in sync with the config change, using
+    // the SAME renderer doctor's drift check uses (buildFichaContent) — this
+    // isolates the assertion to "does the wrapped rendering round-trip
+    // through injectBlock/listBlocks without doctor seeing drift", not
+    // adopt's own skill-detection logic.
+    const claudeMdPath = join(nonRepoDir, "CLAUDE.md");
+    const claudeMd = readFileSync(claudeMdPath, "utf-8");
+    const updated = injectBlock(claudeMd, FICHA_BLOCK_ID, readCliVersion(), buildFichaContent(manySkillsConfig));
+    writeFileSync(claudeMdPath, updated, "utf-8");
+
+    const report = runDoctor({ cwd: nonRepoDir });
+
+    expect(report.findings.some((f) => /ficha/i.test(f.message))).toBe(false);
   });
 });

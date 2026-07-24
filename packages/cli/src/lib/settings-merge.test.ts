@@ -2,7 +2,12 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "n
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { type ArgosHookSpec, isArgosHookCommand, mergeHooksIntoSettings } from "./settings-merge.js";
+import {
+  type ArgosHookSpec,
+  isArgosHookCommand,
+  mergeHooksIntoSettings,
+  removeAllArgosHooksFromSettings,
+} from "./settings-merge.js";
 
 describe("isArgosHookCommand", () => {
   it("is true for a command targeting a /hooks/argos-* script", () => {
@@ -232,5 +237,71 @@ describe("mergeHooksIntoSettings", () => {
     expect(result.detail).toMatch(/cambió durante el merge/);
     // The concurrent writer's content survives — we never clobbered it.
     expect(JSON.parse(readFileSync(settingsPath, "utf-8"))).toEqual({ permissions: { allow: ["Read(**)"] } });
+  });
+});
+
+describe("removeAllArgosHooksFromSettings", () => {
+  let dir: string;
+  let settingsPath: string;
+  let hooksDir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "argos-settings-remove-"));
+    settingsPath = join(dir, "settings.json");
+    hooksDir = join(dir, "hooks");
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("does not remove a foreign hook whose path substring-matches /hooks/argos- but is outside the resolved hooksDir", () => {
+    // This path contains the literal substring "/hooks/argos-" (what the old
+    // bare-regex ownership check matched on) but lives under `dir/my/hooks`,
+    // NOT under the actual managed `hooksDir` (`dir/hooks`) — a user's own
+    // hook that must never be treated as Argos-owned.
+    const foreignScriptPath = join(dir, "my", "hooks", "argos-custom.sh");
+    const settings = {
+      hooks: {
+        PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: `bash "${foreignScriptPath}"` }] }],
+      },
+    };
+    writeFileSync(settingsPath, JSON.stringify(settings, null, 2), "utf-8");
+
+    const result = removeAllArgosHooksFromSettings(settingsPath, hooksDir);
+
+    expect(result.status).toBe("unchanged");
+    expect(result.removedCount).toBe(0);
+    const written = JSON.parse(readFileSync(settingsPath, "utf-8")) as {
+      hooks: { PreToolUse: Array<{ hooks: Array<{ command: string }> }> };
+    };
+    expect(written.hooks.PreToolUse[0]!.hooks[0]!.command).toBe(`bash "${foreignScriptPath}"`);
+  });
+
+  it("preserves a matcher bucket whose hooks include zero Argos-owned entries, even when another bucket does have entries removed", () => {
+    const realArgosScriptPath = join(hooksDir, "argos-guard-destructive.sh");
+    const foreignScriptPath = join(dir, "my", "hooks", "argos-custom.sh");
+    const settings = {
+      hooks: {
+        PreToolUse: [
+          { matcher: "Bash", hooks: [{ type: "command", command: `bash "${realArgosScriptPath}"` }] },
+          { matcher: "Write", hooks: [{ type: "command", command: `bash "${foreignScriptPath}"` }] },
+        ],
+      },
+    };
+    writeFileSync(settingsPath, JSON.stringify(settings, null, 2), "utf-8");
+
+    const result = removeAllArgosHooksFromSettings(settingsPath, hooksDir);
+
+    expect(result.status).toBe("removed");
+    expect(result.removedCount).toBe(1);
+    const written = JSON.parse(readFileSync(settingsPath, "utf-8")) as {
+      hooks: { PreToolUse: Array<{ matcher: string; hooks: Array<{ command: string }> }> };
+    };
+    // The real Argos hook's own bucket is gone — it only ever held that one entry.
+    expect(written.hooks.PreToolUse.some((b) => b.matcher === "Bash")).toBe(false);
+    // The foreign-only "Write" bucket survives untouched, with its hook intact.
+    const writeBucket = written.hooks.PreToolUse.find((b) => b.matcher === "Write");
+    expect(writeBucket?.hooks).toEqual([{ type: "command", command: `bash "${foreignScriptPath}"` }]);
   });
 });

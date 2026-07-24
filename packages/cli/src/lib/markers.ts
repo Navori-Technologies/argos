@@ -183,3 +183,22 @@ export function listBlocks(fileContent: string): ListedBlock[] {
   }
   return blocks;
 }
+
+/**
+ * Ids of every block whose OPEN marker in `fileContent` has no matching
+ * CLOSE marker anywhere in the file — a dangling/unclosed block, usually
+ * crash residue or hand-edited corruption. `listBlocks` alone can't answer
+ * this: it only scans for open markers and doesn't verify a close exists
+ * (see its implementation above), which is exactly why a dangling block
+ * still shows up as "present" there. Callers that need to remove blocks
+ * (see `removeBlock`) must guard against this: a dangling id makes
+ * `removeBlock` a no-op forever, since there is nothing valid to cut.
+ */
+export function listDanglingBlockIds(fileContent: string): string[] {
+  const ids = new Set(listBlocks(fileContent).map((b) => b.id));
+  const dangling: string[] = [];
+  for (const id of ids) {
+    if (findBlock(fileContent, id) === null) dangling.push(id);
+  }
+  return dangling;
+}

@@ -13,7 +13,7 @@ import {
 import { buildFichaContent, FICHA_BLOCK_ID } from "../lib/ficha.js";
 import { getRemoteOriginUrl, isGitRepo, parseIdentityFromRemote } from "../lib/git.js";
 import { listAgentIds, listSkillIds, MANAGED_BLOCK_IDS, resolveAssetsDir } from "../lib/assets.js";
-import { listBlocks } from "../lib/markers.js";
+import { listBlocks, listDanglingBlockIds } from "../lib/markers.js";
 import { hasArgosFileMarker, hasArgosShellFileMarker } from "../lib/managed-files.js";
 import { hasNaviorConfig } from "../lib/navori-import.js";
 import { resolveClaudeDir } from "../lib/paths.js";
@@ -237,6 +237,22 @@ function checkWorkspaceRegistryHealth(findings: DoctorFinding[]): void {
   }
 }
 
+/**
+ * Flag dangling/unclosed managed-block markers (an open marker with no
+ * matching close — crash residue or hand-edited corruption) as a warning.
+ * Reuses `listDanglingBlockIds` (lib/markers.ts) — the same scanning logic
+ * `remove`'s progress-guard relies on to avoid spinning forever on the same
+ * corruption (see commands/remove.ts's processClaudeMd).
+ */
+function checkDanglingMarkers(findings: DoctorFinding[], content: string, label: string): void {
+  for (const id of listDanglingBlockIds(content)) {
+    findings.push({
+      level: "warning",
+      message: `Marker argos huérfano sin cierre en ${label} (bloque "${id}"). Corre argos remove para limpiarlo, o editá el archivo a mano.`,
+    });
+  }
+}
+
 function checkMotor(findings: DoctorFinding[]): void {
   const claudeDir = resolveClaudeDir();
   const currentVersion = readCliVersion();
@@ -245,6 +261,8 @@ function checkMotor(findings: DoctorFinding[]): void {
   const claudeMdPath = join(claudeDir, "CLAUDE.md");
   const claudeMd = readFileSafe(claudeMdPath, findings, "CLAUDE.md");
   const blocks = listBlocks(claudeMd);
+
+  checkDanglingMarkers(findings, claudeMd, "CLAUDE.md");
 
   for (const id of MANAGED_BLOCK_IDS) {
     const matching = blocks.filter((b) => b.id === id);
@@ -331,6 +349,7 @@ function checkRepo(cwd: string, findings: DoctorFinding[]): void {
   // Ficha drift: does ./CLAUDE.md's ficha block match what adopt would write today?
   const claudeMdPath = join(cwd, "CLAUDE.md");
   const claudeMd = readFileSafe(claudeMdPath, findings, "./CLAUDE.md");
+  checkDanglingMarkers(findings, claudeMd, "./CLAUDE.md");
   const fichaBlocks = listBlocks(claudeMd).filter((b) => b.id === FICHA_BLOCK_ID);
   if (fichaBlocks.length > 1) {
     findings.push({

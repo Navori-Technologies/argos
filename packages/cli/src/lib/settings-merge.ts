@@ -1,4 +1,5 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
+import { basename, isAbsolute, relative, resolve, sep } from "node:path";
 import { writeFileAtomic } from "./atomic-write.js";
 
 /**
@@ -16,10 +17,56 @@ import { writeFileAtomic } from "./atomic-write.js";
  */
 
 const ARGOS_HOOK_PATH_RE = /\/hooks\/argos-/;
+const BASH_HOOK_COMMAND_RE = /^bash "(.+)"$/;
+const ARGOS_HOOK_BASENAME_RE = /^argos-/;
 
-/** True when a hook `command` string points at an Argos-owned script (`.../hooks/argos-*`). */
+/**
+ * True when a hook `command` string points at an Argos-owned script (`.../hooks/argos-*`).
+ *
+ * This is a bare substring match — good enough for the non-destructive
+ * `doctor` diagnostic that uses it, but NOT anchored to any real directory.
+ * Destructive operations (deleting hook entries from the user's
+ * settings.json) must use `isArgosOwnedHookCommand` below instead, which
+ * requires the script to actually resolve inside the managed hooks
+ * directory.
+ */
 export function isArgosHookCommand(command: unknown): command is string {
   return typeof command === "string" && ARGOS_HOOK_PATH_RE.test(command);
+}
+
+/** Extract the script path from Argos's own `bash "<scriptPath>"` hook command shape (see `buildHookCommand`). */
+function extractBashScriptPath(command: string): string | undefined {
+  return BASH_HOOK_COMMAND_RE.exec(command)?.[1];
+}
+
+/** True when `candidate` resolves to a path inside (a descendant of) `dir`, via real path resolution — not string matching. */
+function isPathInsideDir(candidate: string, dir: string): boolean {
+  const rel = relative(resolve(dir), resolve(candidate));
+  if (rel === "" || isAbsolute(rel)) return false;
+  return rel !== ".." && !rel.startsWith(`..${sep}`);
+}
+
+/**
+ * True when a hook `command` string is Argos-owned for the purposes of
+ * DESTRUCTIVE removal: it must match Argos's own `bash "<scriptPath>"`
+ * invocation shape, have a basename starting with `argos-`, AND resolve to a
+ * location actually inside `hooksDir` (the real, resolved
+ * `<claudeDir>/hooks` directory this install manages).
+ *
+ * This is intentionally stricter than `isArgosHookCommand`/`ARGOS_HOOK_PATH_RE`,
+ * which only substring-match `/hooks/argos-` anywhere in the command string.
+ * A user's own hook living at an unrelated path that happens to contain that
+ * substring — e.g. `/Users/x/my/hooks/argos-custom.sh`, which is NOT under
+ * the managed hooks directory — would false-match the substring check and be
+ * silently deleted. Anchoring to the resolved hooks directory (via
+ * `path.resolve` + an ancestor check, not `.includes()`) closes that hole.
+ */
+function isArgosOwnedHookCommand(command: unknown, hooksDir: string): command is string {
+  if (typeof command !== "string") return false;
+  const scriptPath = extractBashScriptPath(command);
+  if (!scriptPath) return false;
+  if (!ARGOS_HOOK_BASENAME_RE.test(basename(scriptPath))) return false;
+  return isPathInsideDir(scriptPath, hooksDir);
 }
 
 export interface ArgosHookSpec {
@@ -162,9 +209,11 @@ export function mergeHooksIntoSettings(
   if (removeScriptPaths.length > 0) {
     for (const bucket of preToolUse) {
       if (!isPlainObject(bucket) || !Array.isArray(bucket.hooks)) continue;
-      bucket.hooks = (bucket.hooks as unknown[]).filter(
-        (h) => !(isPlainObject(h) && typeof h.command === "string" && removeScriptPaths.some((p) => h.command.includes(p))),
-      );
+      bucket.hooks = (bucket.hooks as unknown[]).filter((h) => {
+        if (!isPlainObject(h) || typeof h.command !== "string") return true;
+        const command = h.command;
+        return !removeScriptPaths.some((p) => command.includes(p));
+      });
     }
   }
 
@@ -234,4 +283,158 @@ export function mergeHooksIntoSettings(
   }
 
   return { status: existed ? "updated" : "created" };
+}
+
+export type RemoveHooksStatus = "removed" | "unchanged" | "error";
+
+export interface RemoveHooksResult {
+  status: RemoveHooksStatus;
+  detail?: string;
+  /** Count of Argos-owned hook entries actually removed (0 for "unchanged"/"error"). */
+  removedCount: number;
+}
+
+export interface RemoveHooksOptions {
+  /**
+   * Compute what WOULD be removed without writing anything — `argos remove`'s
+   * preview mode. Corrupt-JSON refusal still applies identically in dry-run:
+   * a caller must not be told "removed" for a file it can't safely reason
+   * about.
+   */
+  dryRun?: boolean;
+  /** Same test-only seam as `MergeHooksOptions.onBeforeWrite` above. */
+  onBeforeWrite?: () => void;
+}
+
+/**
+ * Symmetric counterpart to `mergeHooksIntoSettings`: strips every Argos-owned
+ * hook entry (any command matched by `isArgosOwnedHookCommand` against
+ * `hooksDir`, not just the current `HOOK_IDS`) out of `hooks.PreToolUse`,
+ * wherever it's found. Foreign hooks, buckets, and every other top-level key
+ * are left exactly as found — same ownership/refusal contract as the merge
+ * path:
+ * - `hooksDir` is the resolved `<claudeDir>/hooks` directory this install
+ *   manages (normally `join(resolveClaudeDir(), "hooks")`). A hook is only
+ *   ever treated as Argos-owned — and therefore deletable — when its script
+ *   path actually resolves inside `hooksDir` AND its basename starts with
+ *   `argos-`; this is deliberately NOT the same as `isArgosHookCommand`'s
+ *   bare `/hooks/argos-` substring match, which would also match (and
+ *   delete) an unrelated user hook at a path like
+ *   `/Users/x/my/hooks/argos-custom.sh`.
+ * - Missing file, or no `hooks`/`hooks.PreToolUse` at all → "unchanged",
+ *   nothing to remove.
+ * - Corrupt JSON (unparsable, not an object, `hooks` present but not an
+ *   object, or `hooks.PreToolUse` present but not an array) → `status:
+ *   "error"`, writes NOTHING. Never guess at a shape it can't verify.
+ * - A `PreToolUse` bucket that becomes empty after removing Argos's own
+ *   entries is dropped entirely (it only ever existed to hold them — see
+ *   `mergeHooksIntoSettings`, which creates a fresh bucket per matcher on
+ *   demand); a bucket that still has foreign hooks left (including one with
+ *   ZERO Argos-owned hooks in it) keeps its matcher, its hooks, and its
+ *   position untouched.
+ * - Same mtime concurrency guard and atomic write as the merge path.
+ */
+export function removeAllArgosHooksFromSettings(
+  settingsPath: string,
+  hooksDir: string,
+  options: RemoveHooksOptions = {},
+): RemoveHooksResult {
+  if (!existsSync(settingsPath)) return { status: "unchanged", removedCount: 0 };
+
+  let raw: string;
+  let mtimeAtRead: number;
+  try {
+    raw = readFileSync(settingsPath, "utf-8");
+    mtimeAtRead = statSync(settingsPath).mtimeMs;
+  } catch (err) {
+    return { status: "error", detail: errorMessage(err), removedCount: 0 };
+  }
+
+  let settings: Record<string, unknown>;
+  try {
+    const parsed: unknown = raw.trim().length === 0 ? {} : JSON.parse(raw);
+    if (!isPlainObject(parsed)) {
+      return {
+        status: "error",
+        detail: "settings.json existente no es un objeto JSON — arreglalo a mano.",
+        removedCount: 0,
+      };
+    }
+    settings = parsed;
+  } catch (err) {
+    return {
+      status: "error",
+      detail: `settings.json existente tiene JSON inválido (${errorMessage(err)}) — arreglalo a mano.`,
+      removedCount: 0,
+    };
+  }
+
+  if (settings.hooks !== undefined && !isPlainObject(settings.hooks)) {
+    return {
+      status: "error",
+      detail: "settings.json tiene hooks que no es un objeto — arreglalo a mano.",
+      removedCount: 0,
+    };
+  }
+  const hooksRoot = settings.hooks as Record<string, unknown> | undefined;
+  if (!hooksRoot) return { status: "unchanged", removedCount: 0 };
+
+  const preToolUseRaw = hooksRoot.PreToolUse;
+  if (preToolUseRaw !== undefined && !Array.isArray(preToolUseRaw)) {
+    return {
+      status: "error",
+      detail: "settings.json tiene hooks.PreToolUse que no es un array — arreglalo a mano.",
+      removedCount: 0,
+    };
+  }
+  if (!Array.isArray(preToolUseRaw) || preToolUseRaw.length === 0) {
+    return { status: "unchanged", removedCount: 0 };
+  }
+
+  let removedCount = 0;
+  const nextPreToolUse: unknown[] = [];
+  for (const bucket of preToolUseRaw) {
+    if (!isPlainObject(bucket) || !Array.isArray(bucket.hooks)) {
+      nextPreToolUse.push(bucket);
+      continue;
+    }
+    const before = bucket.hooks.length;
+    const filteredHooks = (bucket.hooks as unknown[]).filter(
+      (h) => !(isPlainObject(h) && isArgosOwnedHookCommand(h.command, hooksDir)),
+    );
+    removedCount += before - filteredHooks.length;
+    if (filteredHooks.length === 0) continue; // bucket only ever held Argos's own entries
+    nextPreToolUse.push({ ...bucket, hooks: filteredHooks });
+  }
+
+  if (removedCount === 0) return { status: "unchanged", removedCount: 0 };
+  if (options.dryRun) return { status: "removed", removedCount };
+
+  hooksRoot.PreToolUse = nextPreToolUse;
+  settings.hooks = hooksRoot;
+
+  options.onBeforeWrite?.();
+
+  // Same cheap concurrency guard as mergeHooksIntoSettings.
+  let mtimeNow: number | undefined;
+  try {
+    mtimeNow = statSync(settingsPath).mtimeMs;
+  } catch {
+    mtimeNow = undefined;
+  }
+  if (mtimeNow !== undefined && mtimeNow !== mtimeAtRead) {
+    return {
+      status: "error",
+      detail: "settings.json cambió durante el remove — reintenta.",
+      removedCount: 0,
+    };
+  }
+
+  try {
+    writeFileAtomic(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+  } catch (err) {
+    return { status: "error", detail: errorMessage(err), removedCount: 0 };
+  }
+
+  return { status: "removed", removedCount };
 }

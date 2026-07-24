@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { injectBlock, injectBlockDetailed, listBlocks, removeBlock } from "./markers.js";
+import { injectBlock, injectBlockDetailed, listBlocks, listDanglingBlockIds, removeBlock } from "./markers.js";
 
 describe("injectBlock", () => {
   it("appends a new block to an empty file", () => {
@@ -135,5 +135,27 @@ describe("injectBlockDetailed — duplicate healing", () => {
 
     expect(result.healedDuplicates).toBe(0);
     expect(result.content).toContain('id="voice"');
+  });
+});
+
+describe("listDanglingBlockIds", () => {
+  it("returns an empty array when every block is properly closed", () => {
+    let content = injectBlock("", "identity", "1.0.0", "You are Argos.");
+    content = injectBlock(content, "voice", "1.0.0", "Speak plainly.");
+    expect(listDanglingBlockIds(content)).toEqual([]);
+  });
+
+  it("returns an empty array for a file with no managed blocks at all", () => {
+    expect(listDanglingBlockIds("# Just prose\n")).toEqual([]);
+  });
+
+  it("flags an id whose open marker has no matching close marker", () => {
+    const dangling = `<!-- argos:managed id="identidad" v="1.0.0" -->\nSome content, never closed.\n`;
+    expect(listDanglingBlockIds(dangling)).toEqual(["identidad"]);
+  });
+
+  it("only flags the dangling id, leaving a properly-closed sibling block out", () => {
+    const content = `${injectBlock("", "voice", "1.0.0", "Speak plainly.")}\n<!-- argos:managed id="identidad" v="1.0.0" -->\nNever closed.\n`;
+    expect(listDanglingBlockIds(content)).toEqual(["identidad"]);
   });
 });

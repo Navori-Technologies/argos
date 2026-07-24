@@ -2,6 +2,7 @@ import { defineCommand, runMain } from "citty";
 import { initCommand } from "./commands/init.js";
 import { adoptCommand } from "./commands/adopt.js";
 import { doctorCommand } from "./commands/doctor.js";
+import { removeCommand } from "./commands/remove.js";
 import { workspaceCommand } from "./commands/workspace.js";
 import { readCliVersion } from "./lib/version.js";
 
@@ -15,6 +16,7 @@ const main = defineCommand({
     init: initCommand,
     adopt: adoptCommand,
     doctor: doctorCommand,
+    remove: removeCommand,
     workspace: workspaceCommand,
   },
 });
