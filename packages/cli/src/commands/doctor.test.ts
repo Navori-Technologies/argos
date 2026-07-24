@@ -1,10 +1,11 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { readConfig, writeConfig } from "../lib/config.js";
 import { injectBlock } from "../lib/markers.js";
+import { linkRepo, saveRegistry, type WorkspaceRegistry } from "../lib/workspaces.js";
 import { runAdopt } from "./adopt.js";
 import { runDoctor } from "./doctor.js";
 import { runInit } from "./init.js";
@@ -202,5 +203,166 @@ describe("runDoctor", () => {
     const errorFindings = report.findings.filter((f) => f.level === "error");
     expect(errorFindings.length).toBeGreaterThan(0);
     expect(errorFindings.every((f) => !/ZodError|issues:/.test(f.message))).toBe(true);
+  });
+
+  // --- F2: hooks ---------------------------------------------------------
+
+  it("stays silent about hooks when the motor is freshly installed", () => {
+    runInit();
+    const report = runDoctor({ cwd: nonRepoDir });
+
+    expect(report.exitCode).toBe(0);
+    expect(report.findings.some((f) => /hook/i.test(f.message))).toBe(false);
+  });
+
+  it("warns when a global hook script is missing", () => {
+    runInit();
+    const hookPath = join(claudeDir, "hooks", "argos-guard-destructive.sh");
+    rmSync(hookPath);
+
+    const report = runDoctor({ cwd: nonRepoDir });
+
+    expect(report.exitCode).toBe(1);
+    expect(
+      report.findings.some(
+        (f) => f.level === "warning" && /argos-guard-destructive\.sh/.test(f.message) && /argos init/.test(f.message),
+      ),
+    ).toBe(true);
+  });
+
+  it("warns when a hook script's marker version is older than the binary", () => {
+    runInit();
+    const hookPath = join(claudeDir, "hooks", "argos-guard-destructive.sh");
+    const hookContent = readFileSync(hookPath, "utf-8").replace(/# argos:file v="[^"]*"/, '# argos:file v="-1"');
+    writeFileSync(hookPath, hookContent, "utf-8");
+
+    const report = runDoctor({ cwd: nonRepoDir });
+
+    expect(report.exitCode).toBe(1);
+    expect(
+      report.findings.some(
+        (f) =>
+          f.level === "warning" && /argos-guard-destructive\.sh/.test(f.message) && /desactualizado/.test(f.message),
+      ),
+    ).toBe(true);
+  });
+
+  it("warns when settings.json references an orphaned hook (script file gone)", () => {
+    runInit();
+    const hookPath = join(claudeDir, "hooks", "argos-guard-destructive.sh");
+    rmSync(hookPath);
+
+    const report = runDoctor({ cwd: nonRepoDir });
+
+    expect(report.exitCode).toBe(1);
+    expect(
+      report.findings.some(
+        (f) => f.level === "warning" && /huérfano/.test(f.message) && /argos-guard-destructive\.sh/.test(f.message),
+      ),
+    ).toBe(true);
+  });
+
+  it("flags a settings.json hook entry as orphaned when its script path is a directory, not a file", () => {
+    runInit();
+    const hookPath = join(claudeDir, "hooks", "argos-guard-destructive.sh");
+    // `existsSync` alone is true for directories too — replacing the script
+    // with a directory of the same name must still be flagged as orphaned.
+    rmSync(hookPath, { recursive: true, force: true });
+    mkdirSync(hookPath, { recursive: true });
+
+    const report = runDoctor({ cwd: nonRepoDir });
+
+    expect(report.exitCode).toBe(1);
+    expect(
+      report.findings.some(
+        (f) => f.level === "warning" && /huérfano/.test(f.message) && /argos-guard-destructive\.sh/.test(f.message),
+      ),
+    ).toBe(true);
+  });
+
+  it("reports an error finding instead of throwing when settings.json has invalid JSON", () => {
+    runInit();
+    const settingsPath = join(claudeDir, "settings.json");
+    writeFileSync(settingsPath, "{ not valid json", "utf-8");
+
+    const report = runDoctor({ cwd: nonRepoDir });
+
+    expect(report.exitCode).toBe(1);
+    expect(
+      report.findings.some((f) => f.level === "error" && /settings\.json/.test(f.message) && /JSON/.test(f.message)),
+    ).toBe(true);
+  });
+
+  // --- F2: workspaces ------------------------------------------------------
+
+  it("suggests `argos workspace link` when the repo isn't registered in any workspace", () => {
+    initGitRepo(nonRepoDir);
+    runInit();
+    runAdopt({ cwd: nonRepoDir });
+
+    const report = runDoctor({ cwd: nonRepoDir });
+
+    expect(report.exitCode).toBe(1);
+    expect(
+      report.findings.some((f) => f.level === "info" && /workspace link/.test(f.message)),
+    ).toBe(true);
+  });
+
+  it("warns about workspace registry entries whose repo path no longer exists on disk", () => {
+    runInit();
+    const registry: WorkspaceRegistry = {
+      bonum: {
+        match: { remotes: [], paths: [] },
+        repos: [{ name: "ghost-repo", path: join(tmpdir(), "argos-doctor-ghost-repo-does-not-exist") }],
+      },
+    };
+    saveRegistry(registry);
+
+    const report = runDoctor({ cwd: nonRepoDir });
+
+    expect(report.exitCode).toBe(1);
+    expect(
+      report.findings.some(
+        (f) => f.level === "warning" && /ghost-repo/.test(f.message) && /paths inexistentes/i.test(f.message),
+      ),
+    ).toBe(true);
+  });
+
+  it("reports a structured error finding instead of crashing when workspaces.json is corrupt", () => {
+    initGitRepo(nonRepoDir);
+    runInit();
+    runAdopt({ cwd: nonRepoDir });
+    writeFileSync(join(argosHome, "workspaces.json"), "{ not valid json", "utf-8");
+
+    const report = runDoctor({ cwd: nonRepoDir });
+
+    expect(report.exitCode).toBe(1);
+    expect(
+      report.findings.some((f) => f.level === "error" && /workspaces\.json/.test(f.message) && /corrupto/.test(f.message)),
+    ).toBe(true);
+  });
+
+  it("warns about a stale registered path when a linked repo relocates", () => {
+    initGitRepo(nonRepoDir);
+    runInit();
+    runAdopt({ cwd: nonRepoDir });
+
+    const config = readConfig(nonRepoDir);
+    linkRepo("bonum", { name: config.name, path: nonRepoDir });
+    writeConfig(nonRepoDir, { ...config, workspace: "bonum" });
+
+    const relocatedDir = `${nonRepoDir}-relocated`;
+    renameSync(nonRepoDir, relocatedDir);
+    try {
+      const report = runDoctor({ cwd: relocatedDir });
+
+      expect(report.exitCode).toBe(1);
+      expect(
+        report.findings.some((f) => f.level === "warning" && /path distinto/i.test(f.message)),
+      ).toBe(true);
+    } finally {
+      // Restore the original path so afterEach's rmSync(nonRepoDir) still works.
+      renameSync(relocatedDir, nonRepoDir);
+    }
   });
 });

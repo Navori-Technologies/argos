@@ -1,6 +1,6 @@
 import { defineCommand } from "citty";
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { join, resolve } from "node:path";
 import pc from "picocolors";
 import { z } from "zod";
 import { ArgosConfigSchema, hasConfig } from "../lib/config.js";
@@ -14,10 +14,12 @@ import { buildFichaContent, FICHA_BLOCK_ID } from "../lib/ficha.js";
 import { getRemoteOriginUrl, isGitRepo, parseIdentityFromRemote } from "../lib/git.js";
 import { listAgentIds, listSkillIds, MANAGED_BLOCK_IDS, resolveAssetsDir } from "../lib/assets.js";
 import { listBlocks } from "../lib/markers.js";
-import { hasArgosFileMarker } from "../lib/managed-files.js";
+import { hasArgosFileMarker, hasArgosShellFileMarker } from "../lib/managed-files.js";
 import { hasNaviorConfig } from "../lib/navori-import.js";
 import { resolveClaudeDir } from "../lib/paths.js";
+import { isArgosHookCommand } from "../lib/settings-merge.js";
 import { readCliVersion } from "../lib/version.js";
+import { loadRegistry, resolveWorkspaceForRepo } from "../lib/workspaces.js";
 import { describeZodError } from "../lib/zod-messages.js";
 import { NO_GATE_PLACEHOLDER } from "./adopt.js";
 
@@ -64,6 +66,175 @@ function compareVersions(a: string, b: string): number {
     if (diff !== 0) return diff;
   }
   return 0;
+}
+
+/**
+ * Ids (basenames under `<claudeDir>/hooks/`) of the 2 global hooks `argos
+ * init` installs (see spec 0003 "Hooks globales parametrizados"). Mirrors
+ * `HOOK_IDS` in commands/init.ts — kept as a local duplicate here since
+ * doctor only reads the filesystem/version drift, it never installs, and the
+ * two commands are intentionally not allowed to share private constants.
+ */
+const HOOK_IDS = ["argos-guard-destructive", "argos-quality-gate"] as const;
+
+/** Extract the version stamped by a shell-comment `# argos:file v="<version>"` marker (see lib/managed-files.ts). */
+function extractShellMarkerVersion(content: string): string | null {
+  return /^# argos:file v="([^"]*)"/m.exec(content)?.[1] ?? null;
+}
+
+/** Extract the script path from an Argos hook command string (`bash "<scriptPath>"`, see lib/settings-merge.ts). */
+function extractHookScriptPath(command: string): string | null {
+  return /^bash "(.+)"$/.exec(command)?.[1] ?? null;
+}
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+/**
+ * Hooks (F2, motor scope): presence, ownership, and version drift of the 2
+ * global hook scripts under `<claudeDir>/hooks/`. Same bidirectional-version
+ * convention as the CLAUDE.md managed-blocks check in `checkMotor`.
+ */
+function checkHookScripts(findings: DoctorFinding[], claudeDir: string, currentVersion: string): void {
+  for (const id of HOOK_IDS) {
+    const hookPath = join(claudeDir, "hooks", `${id}.sh`);
+    if (!existsSync(hookPath)) {
+      findings.push({ level: "warning", message: `Falta el hook hooks/${id}.sh. Corre argos init.` });
+      continue;
+    }
+
+    const beforeCount = findings.length;
+    const content = readFileSafe(hookPath, findings, `hooks/${id}.sh`);
+    if (findings.length > beforeCount) continue; // read error already reported by readFileSafe
+
+    if (!hasArgosShellFileMarker(content)) {
+      findings.push({ level: "info", message: `hooks/${id}.sh existe pero es ajeno (sin marker argos:file).` });
+      continue;
+    }
+
+    const hookVersion = extractShellMarkerVersion(content);
+    if (!hookVersion) continue;
+    const cmp = compareVersions(hookVersion, currentVersion);
+    if (cmp < 0) {
+      findings.push({
+        level: "warning",
+        message: `hooks/${id}.sh está desactualizado (v${hookVersion} < v${currentVersion}). Corre argos init.`,
+      });
+    } else if (cmp > 0) {
+      findings.push({
+        level: "warning",
+        message: `hooks/${id}.sh es más nuevo que el binario (v${hookVersion} > v${currentVersion}) — el binario es más viejo que el motor instalado — actualiza el paquete (npm i -g).`,
+      });
+    }
+  }
+}
+
+/**
+ * Hooks (F2, motor scope): `settings.json` PreToolUse entries — missing,
+ * orphaned (the entry's script file is gone), or the file itself unreadable
+ * as valid JSON. Guarded reads throughout: never throws, always degrades to
+ * an error finding so the rest of doctor's audit still runs.
+ */
+function checkHookSettings(findings: DoctorFinding[], claudeDir: string): void {
+  const settingsPath = join(claudeDir, "settings.json");
+  if (!existsSync(settingsPath)) {
+    for (const id of HOOK_IDS) {
+      findings.push({ level: "warning", message: `Falta la entrada del hook ${id} en settings.json. Corre argos init.` });
+    }
+    return;
+  }
+
+  let raw: string;
+  try {
+    raw = readFileSync(settingsPath, "utf-8");
+  } catch (err) {
+    findings.push({
+      level: "error",
+      message: `No se pudo leer settings.json (${err instanceof Error ? err.message : String(err)}).`,
+    });
+    return;
+  }
+
+  let settings: unknown;
+  try {
+    settings = raw.trim().length === 0 ? {} : JSON.parse(raw);
+  } catch (err) {
+    findings.push({
+      level: "error",
+      message: `settings.json tiene JSON inválido (${err instanceof Error ? err.message : String(err)}).`,
+    });
+    return;
+  }
+
+  const foundScriptPaths = new Set<string>();
+  const hooksRoot = isPlainObject(settings) ? settings.hooks : undefined;
+  const preToolUse = isPlainObject(hooksRoot) ? hooksRoot.PreToolUse : undefined;
+  if (Array.isArray(preToolUse)) {
+    for (const bucket of preToolUse) {
+      if (!isPlainObject(bucket) || !Array.isArray(bucket.hooks)) continue;
+      for (const hook of bucket.hooks) {
+        if (!isPlainObject(hook) || !isArgosHookCommand(hook.command)) continue;
+        const scriptPath = extractHookScriptPath(hook.command);
+        if (!scriptPath) continue;
+        foundScriptPaths.add(scriptPath);
+        // `existsSync` alone is true for directories too — a settings.json
+        // entry pointing at a directory (e.g. a failed write that left a
+        // stray directory in the script's place) would otherwise read as
+        // "present" here and slip past the orphan check.
+        let isRealFile = false;
+        try {
+          isRealFile = existsSync(scriptPath) && statSync(scriptPath).isFile();
+        } catch {
+          isRealFile = false;
+        }
+        if (!isRealFile) {
+          findings.push({
+            level: "warning",
+            message: `settings.json referencia el hook huérfano ${scriptPath} (el script ya no existe). Corre argos init.`,
+          });
+        }
+      }
+    }
+  }
+
+  for (const id of HOOK_IDS) {
+    const expectedPath = join(claudeDir, "hooks", `${id}.sh`);
+    if (!foundScriptPaths.has(expectedPath)) {
+      findings.push({ level: "warning", message: `Falta la entrada del hook ${id} en settings.json. Corre argos init.` });
+    }
+  }
+}
+
+/**
+ * Workspaces (F2, motor scope): `~/.argos/workspaces.json` registry entries
+ * whose repo path no longer exists on disk (moved/deleted repo). Guarded
+ * against a corrupt registry file — never throws.
+ */
+function checkWorkspaceRegistryHealth(findings: DoctorFinding[]): void {
+  let registry: ReturnType<typeof loadRegistry>;
+  try {
+    registry = loadRegistry();
+  } catch (err) {
+    findings.push({
+      level: "error",
+      message: `No se pudo leer workspaces.json (${err instanceof Error ? err.message : String(err)}).`,
+    });
+    return;
+  }
+
+  const stale: string[] = [];
+  for (const [wsName, ws] of Object.entries(registry)) {
+    for (const repo of ws.repos) {
+      if (!existsSync(repo.path)) stale.push(`${wsName}/${repo.name} (${repo.path})`);
+    }
+  }
+  if (stale.length > 0) {
+    findings.push({
+      level: "warning",
+      message: `Hay repos registrados en workspaces con paths inexistentes: ${stale.join(", ")}. Corre argos workspace link o editá el registro a mano.`,
+    });
+  }
 }
 
 function checkMotor(findings: DoctorFinding[]): void {
@@ -122,6 +293,10 @@ function checkMotor(findings: DoctorFinding[]): void {
       findings.push({ level: "info", message: `${label} existe pero es ajeno (sin marker argos:file).` });
     }
   }
+
+  checkHookScripts(findings, claudeDir, currentVersion);
+  checkHookSettings(findings, claudeDir);
+  checkWorkspaceRegistryHealth(findings);
 }
 
 function checkRepo(cwd: string, findings: DoctorFinding[]): void {
@@ -215,6 +390,60 @@ function checkRepo(cwd: string, findings: DoctorFinding[]): void {
       level: "warning",
       message: `La identidad detectada (${freshIdentity}) difiere de la registrada (${config.identity}). Corre argos adopt --refresh.`,
     });
+  }
+
+  // Workspace linkage (F2): repo not registered, registered under a stale
+  // path, or config.workspace pointing at a name absent from the registry.
+  let registry: ReturnType<typeof loadRegistry>;
+  try {
+    registry = loadRegistry();
+  } catch (err) {
+    findings.push({
+      level: "error",
+      message: `No se pudo leer workspaces.json (${err instanceof Error ? err.message : String(err)}).`,
+    });
+    return;
+  }
+  const resolution = resolveWorkspaceForRepo(registry, {
+    configWorkspace: config.workspace,
+    remoteUrl,
+    repoPath: cwd,
+  });
+
+  if (resolution.kind === "unresolved") {
+    findings.push({
+      level: "info",
+      message: "El repo no está vinculado a ningún workspace. Corre argos workspace link.",
+    });
+  } else if (resolution.kind === "resolved") {
+    const workspace = registry[resolution.name];
+    if (!workspace) {
+      findings.push({
+        level: "warning",
+        message: `argos.config.json referencia el workspace '${resolution.name}', que no existe en el registro. Corre argos workspace link ${resolution.name}.`,
+      });
+    } else {
+      const entry = workspace.repos.find((r) => r.name === config.name);
+      if (!entry) {
+        findings.push({
+          level: "info",
+          message: "El repo no está vinculado a ningún workspace. Corre argos workspace link.",
+        });
+      } else {
+        let realCwd: string | undefined;
+        try {
+          realCwd = realpathSync(resolve(cwd));
+        } catch {
+          realCwd = undefined;
+        }
+        if (realCwd && entry.path !== realCwd) {
+          findings.push({
+            level: "warning",
+            message: `El repo está registrado en el workspace '${resolution.name}' con un path distinto (${entry.path} vs ${realCwd}). Corre argos workspace link para actualizarlo.`,
+          });
+        }
+      }
+    }
   }
 }
 

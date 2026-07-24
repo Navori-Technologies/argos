@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -87,5 +87,11 @@ describe("readConfig / writeConfig", () => {
       // @ts-expect-error intentionally invalid input for the runtime check
       writeConfig(repoDir, { qualityGate: { fast: "pnpm test" } }),
     ).toThrow();
+  });
+
+  it("leaves no .tmp file behind after writeConfig (atomic write)", () => {
+    writeConfig(repoDir, { name: "my-repo", qualityGate: { fast: "pnpm test" } });
+    const residue = readdirSync(repoDir).filter((f) => f.includes(".tmp"));
+    expect(residue).toEqual([]);
   });
 });
