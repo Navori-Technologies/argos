@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { readConfig } from "../lib/config.js";
+import { loadRegistry, saveRegistry, type WorkspaceRegistry } from "../lib/workspaces.js";
 import { NO_GATE_PLACEHOLDER, runAdopt } from "./adopt.js";
 
 function initGitRepo(dir: string, remoteUrl?: string): void {
@@ -169,6 +170,65 @@ describe("runAdopt", () => {
     const backedUpContent = readFileSync(join(report.backupPath as string, "CLAUDE.md"), "utf-8");
     expect(backedUpContent).toBe(originalContent);
     expect(readdirSync(join(argosHome, "backups")).length).toBeGreaterThan(0);
+  });
+
+  it("auto-links the repo when its remote matches a seeded workspace registry", () => {
+    initGitRepo(repoDir, "git@github.com:bonum/my-repo.git");
+    const registry: WorkspaceRegistry = {
+      bonum: { match: { remotes: ["github.com-bonum"], paths: [] }, repos: [] },
+    };
+    saveRegistry(registry);
+
+    const report = runAdopt({ cwd: repoDir });
+
+    expect(report.exitCode).toBe(0);
+    expect(report.rows.some((r) => r.field === "workspace.link" && r.source === "detected")).toBe(true);
+    const config = readConfig(repoDir);
+    const after = loadRegistry();
+    expect(after.bonum?.repos.map((r) => r.name)).toContain(config.name);
+  });
+
+  it("reports an info row (never blocking) when the workspace can't be resolved", () => {
+    initGitRepo(repoDir, "git@github.com:nowhere/my-repo.git");
+
+    const report = runAdopt({ cwd: repoDir });
+
+    expect(report.exitCode).toBe(0);
+    const linkRow = report.rows.find((r) => r.field === "workspace.link");
+    expect(linkRow?.source).toBe("info");
+    expect(linkRow?.value).toMatch(/workspace link/);
+  });
+
+  it("degrades to a warning row (never aborting the rest of adopt) when workspaces.json is corrupt", () => {
+    initGitRepo(repoDir, "git@github.com:bonum/my-repo.git");
+    writeFileSync(join(argosHome, "workspaces.json"), "{ not valid json", "utf-8");
+
+    const report = runAdopt({ cwd: repoDir });
+
+    // The rest of adopt still ran to completion — config + ficha written.
+    expect(report.exitCode).toBe(0);
+    expect(readConfig(repoDir).name).toBeTruthy();
+    expect(report.fichaStatus).toBe("created");
+
+    const linkRow = report.rows.find((r) => r.field === "workspace.link");
+    expect(linkRow?.source).toBe("warning");
+    expect(linkRow?.value).toMatch(/corrupto/);
+  });
+
+  it("reports a warning row (never blocking) when the workspace match is ambiguous", () => {
+    initGitRepo(repoDir, "git@github.com:bonum/my-repo.git");
+    const registry: WorkspaceRegistry = {
+      a: { match: { remotes: ["bonum"], paths: [] }, repos: [] },
+      b: { match: { remotes: ["bonum"], paths: [] }, repos: [] },
+    };
+    saveRegistry(registry);
+
+    const report = runAdopt({ cwd: repoDir });
+
+    expect(report.exitCode).toBe(0);
+    const linkRow = report.rows.find((r) => r.field === "workspace.link");
+    expect(linkRow?.source).toBe("warning");
+    expect(linkRow?.value).toMatch(/ambiguo/);
   });
 
   it.skipIf(process.platform === "win32")(

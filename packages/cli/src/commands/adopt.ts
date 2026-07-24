@@ -1,7 +1,8 @@
 import { defineCommand } from "citty";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import pc from "picocolors";
+import { writeFileAtomic } from "../lib/atomic-write.js";
 import {
   CONFIG_FILENAME,
   type ArgosConfig,
@@ -25,6 +26,7 @@ import { injectBlock, listBlocks } from "../lib/markers.js";
 import type { FileStatus } from "../lib/managed-files.js";
 import { readNaviorConfig } from "../lib/navori-import.js";
 import { readCliVersion } from "../lib/version.js";
+import { linkRepo, loadRegistry, resolveWorkspaceForRepo } from "../lib/workspaces.js";
 
 /** Written when no lint/typecheck/test script exists to build a real gate from. */
 export const NO_GATE_PLACEHOLDER =
@@ -33,7 +35,7 @@ export const NO_GATE_PLACEHOLDER =
 export interface AdoptRow {
   field: string;
   value: string;
-  source: "imported" | "preserved" | "detected" | "default" | "warning" | "error";
+  source: "imported" | "preserved" | "detected" | "default" | "info" | "warning" | "error";
 }
 
 export interface AdoptOptions {
@@ -231,6 +233,41 @@ export function runAdopt(options: AdoptOptions): AdoptReport {
     return { rows, configPath, exitCode: 1 };
   }
 
+  // Workspace auto-link: resolve the same explicit>config>match-rules chain
+  // `workspace link` uses and register the repo when it resolves cleanly.
+  // Never blocks adopt — an unresolved or ambiguous result is reported as a
+  // pending step (info/warning row), not an error.
+  try {
+    const registry = loadRegistry();
+    const resolution = resolveWorkspaceForRepo(registry, {
+      configWorkspace: finalConfig.workspace,
+      remoteUrl,
+      repoPath: cwd,
+    });
+    if (resolution.kind === "resolved") {
+      const linkResult = linkRepo(resolution.name, { name: finalConfig.name, path: cwd });
+      rows.push({
+        field: "workspace.link",
+        value: `${linkResult.action} en workspace '${resolution.name}'`,
+        source: "detected",
+      });
+    } else if (resolution.kind === "ambiguous") {
+      rows.push({
+        field: "workspace.link",
+        value: `ambiguo entre workspaces (${resolution.candidates.join(", ")}) — corre argos workspace link <nombre>`,
+        source: "warning",
+      });
+    } else {
+      rows.push({
+        field: "workspace.link",
+        value: "workspace sin resolver — corre argos workspace link <nombre>",
+        source: "info",
+      });
+    }
+  } catch (err) {
+    rows.push({ field: "workspace.link", value: errorMessage(err), source: "warning" });
+  }
+
   // Ficha: inject/replace the `ficha` managed block in ./CLAUDE.md via the
   // same markers lib used for the global engine — foreign content untouched.
   let fichaStatus: FileStatus | undefined;
@@ -246,7 +283,7 @@ export function runAdopt(options: AdoptOptions): AdoptReport {
     const hadFicha = listBlocks(claudeMdBefore).some((b) => b.id === FICHA_BLOCK_ID);
     const claudeMdAfter = injectBlock(claudeMdBefore, FICHA_BLOCK_ID, readCliVersion(), fichaContent);
     fichaStatus = claudeMdAfter === claudeMdBefore ? "unchanged" : hadFicha ? "updated" : "created";
-    writeFileSync(claudeMdPath, claudeMdAfter, "utf-8");
+    writeFileAtomic(claudeMdPath, claudeMdAfter);
     rows.push({ field: "ficha (./CLAUDE.md)", value: fichaStatus, source: "detected" });
   } catch (err) {
     rows.push({ field: "ficha (./CLAUDE.md)", value: errorMessage(err), source: "error" });
