@@ -1,0 +1,23 @@
+{
+  "name": "@argos/cli",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Argos CLI — global-first harness for Claude Code",
+  "bin": {
+    "argos": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "assets"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@clack/prompts": "^1.7.0",
+    "citty": "^0.2.2",
+    "picocolors": "^1.1.1",
+    "zod": "^4.4.3"
+  }
+}

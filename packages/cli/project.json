@@ -1,0 +1,28 @@
+{
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "name": "cli",
+  "projectType": "application",
+  "sourceRoot": "packages/cli/src",
+  "targets": {
+    "build": {
+      "executor": "@nx/js:swc",
+      "outputs": ["{options.outputPath}"],
+      "options": {
+        "main": "packages/cli/src/index.ts",
+        "outputPath": "packages/cli/dist",
+        "tsConfig": "packages/cli/tsconfig.lib.json",
+        "swcrc": "packages/cli/.swcrc",
+        "skipTypeCheck": true,
+        "stripLeadingPaths": true
+      }
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "outputs": ["{projectRoot}/coverage"],
+      "options": {
+        "command": "vitest run",
+        "cwd": "packages/cli"
+      }
+    }
+  }
+}

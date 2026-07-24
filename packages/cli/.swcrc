@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json.schemastore.org/swcrc",
+  "jsc": {
+    "target": "es2022",
+    "parser": {
+      "syntax": "typescript",
+      "decorators": false,
+      "dynamicImport": true
+    },
+    "externalHelpers": true,
+    "keepClassNames": true,
+    "loose": false
+  },
+  "module": {
+    "type": "es6"
+  },
+  "sourceMaps": true,
+  "exclude": ["\\.test\\.ts$"]
+}
