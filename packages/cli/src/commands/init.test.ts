@@ -438,6 +438,112 @@ describe("runInit", () => {
       expect(existsSync(join(skillDir, "references", "core.md"))).toBe(false);
     });
   });
+
+  describe("--force", () => {
+    function seedForeignAngularSkill(): { skillDir: string; foreignSkillMd: string; foreignSubfile: string } {
+      const skillDir = join(claudeDir, "skills", "angular");
+      mkdirSync(join(skillDir, "references"), { recursive: true });
+      const foreignSkillMd = "---\nname: angular\n---\n\nMy own hand-written skill.\n";
+      const foreignSubfile = "My own hand-written reference notes.\n";
+      writeFileSync(join(skillDir, "SKILL.md"), foreignSkillMd, "utf-8");
+      writeFileSync(join(skillDir, "references", "core.md"), foreignSubfile, "utf-8");
+      return { skillDir, foreignSkillMd, foreignSubfile };
+    }
+
+    it("overwrites a seeded foreign skill (SKILL.md + subfile) and stamps argos:file markers on both", () => {
+      const { skillDir, foreignSkillMd, foreignSubfile } = seedForeignAngularSkill();
+
+      const report = runInit({ force: true });
+
+      expect(report.exitCode).toBe(0);
+      const skillMdRow = report.rows.find((r) => r.path === join("skills", "angular", "SKILL.md"));
+      const coreRow = report.rows.find((r) => r.path === join("skills", "angular", "references", "core.md"));
+      expect(skillMdRow?.status).toBe("overwritten-foreign");
+      expect(coreRow?.status).toBe("overwritten-foreign");
+
+      const skillMdContent = readFileSync(join(skillDir, "SKILL.md"), "utf-8");
+      expect(skillMdContent).not.toBe(foreignSkillMd);
+      expect(skillMdContent).toContain('<!-- argos:file v="');
+      expect(readFileSync(join(skillDir, "references", "core.md"), "utf-8")).not.toBe(foreignSubfile);
+
+      // The marker lands with the write — a later NON-forced run must treat
+      // it as owned from now on, never skipped-foreign again.
+      const second = runInit();
+      const secondRow = second.rows.find((r) => r.path === join("skills", "angular", "SKILL.md"));
+      expect(secondRow?.status).toBe("unchanged");
+    });
+
+    it("without --force, the same seeded foreign skill is left skipped-foreign, byte-identical (unchanged default behavior)", () => {
+      const { skillDir, foreignSkillMd, foreignSubfile } = seedForeignAngularSkill();
+
+      const report = runInit();
+
+      const skillMdRow = report.rows.find((r) => r.path === join("skills", "angular", "SKILL.md"));
+      expect(skillMdRow?.status).toBe("skipped-foreign");
+      expect(readFileSync(join(skillDir, "SKILL.md"), "utf-8")).toBe(foreignSkillMd);
+      expect(readFileSync(join(skillDir, "references", "core.md"), "utf-8")).toBe(foreignSubfile);
+    });
+
+    it("overwrites a foreign hook script and stamps its shell marker", () => {
+      const guardPath = join(claudeDir, "hooks", "argos-guard-destructive.sh");
+      mkdirSync(join(claudeDir, "hooks"), { recursive: true });
+      const foreignContent = "#!/usr/bin/env bash\necho hand-written hook\n";
+      writeFileSync(guardPath, foreignContent, "utf-8");
+
+      const report = runInit({ force: true });
+
+      const row = report.rows.find((r) => r.path === join("hooks", "argos-guard-destructive.sh"));
+      expect(row?.status).toBe("overwritten-foreign");
+      const written = readFileSync(guardPath, "utf-8");
+      expect(written).not.toBe(foreignContent);
+      expect(written).toContain('# argos:file v="');
+    });
+
+    it("HARD BOUNDARY: foreign CLAUDE.md prose survives --force byte-exact (managed-block injection stays own-blocks-only)", () => {
+      mkdirSync(claudeDir, { recursive: true });
+      const foreignContent = "# My global notes\n\nHand-written, do not touch.\n";
+      writeFileSync(join(claudeDir, "CLAUDE.md"), foreignContent, "utf-8");
+
+      runInit({ force: true });
+
+      const claudeMd = readFileSync(join(claudeDir, "CLAUDE.md"), "utf-8");
+      expect(claudeMd.startsWith(foreignContent)).toBe(true);
+      expect(claudeMd).toContain('id="identidad"');
+    });
+
+    it("HARD BOUNDARY: a foreign settings.json entry survives --force byte-exact (surgical merge unchanged)", () => {
+      mkdirSync(claudeDir, { recursive: true });
+      const foreign = {
+        hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "echo user-hook" }] }] },
+        permissions: { allow: ["Read(**)"] },
+      };
+      writeFileSync(join(claudeDir, "settings.json"), JSON.stringify(foreign, null, 2), "utf-8");
+
+      const report = runInit({ force: true });
+      expect(report.exitCode).toBe(0);
+
+      const settings = JSON.parse(readFileSync(join(claudeDir, "settings.json"), "utf-8")) as {
+        hooks: { PreToolUse: Array<{ matcher: string; hooks: Array<{ command: string }> }> };
+        permissions: { allow: string[] };
+      };
+      expect(settings.permissions).toEqual({ allow: ["Read(**)"] });
+      const bashBucket = settings.hooks.PreToolUse.find((b) => b.matcher === "Bash")!;
+      expect(bashBucket.hooks.map((h) => h.command)[0]).toBe("echo user-hook");
+      // argos's own hooks still land alongside it — surgical merge is unchanged by --force.
+      const commands = bashBucket.hooks.map((h) => h.command);
+      expect(commands.some((c) => c.includes("argos-guard-destructive.sh"))).toBe(true);
+    });
+
+    it("backup taken before the overwrite contains the foreign file's ORIGINAL content", () => {
+      const { foreignSkillMd } = seedForeignAngularSkill();
+
+      const report = runInit({ force: true });
+
+      expect(report.backupPath).toBeTruthy();
+      const backedUp = readFileSync(join(report.backupPath as string, "skills", "angular", "SKILL.md"), "utf-8");
+      expect(backedUp).toBe(foreignSkillMd);
+    });
+  });
 });
 
 describe("runInitInteractive", () => {
@@ -549,6 +655,84 @@ describe("runInitInteractive", () => {
       expect(report.rows).toEqual([]);
       const after = existsSync(claudeDir) ? readdirSync(claudeDir) : [];
       expect(after).toEqual(before);
+    });
+
+    describe("--force confirm prompt", () => {
+      function seedForeignAngularSkill(): string {
+        const skillDir = join(claudeDir, "skills", "angular");
+        mkdirSync(skillDir, { recursive: true });
+        const foreignSkillMd = "---\nname: angular\n---\n\nMy own hand-written skill.\n";
+        writeFileSync(join(skillDir, "SKILL.md"), foreignSkillMd, "utf-8");
+        return foreignSkillMd;
+      }
+
+      it("accepting the force confirm proceeds and overwrites the foreign file", async () => {
+        seedForeignAngularSkill();
+        const prompter = makeFakePrompter([
+          "es", // language
+          true, // installAgents
+          true, // installHooks
+          true, // accept the force-overwrite confirm
+          true, // final confirm
+        ]);
+
+        const report = await runInitInteractive({ force: true, prompter });
+
+        expect(report.exitCode).toBe(0);
+        const row = report.rows.find((r) => r.path === join("skills", "angular", "SKILL.md"));
+        expect(row?.status).toBe("overwritten-foreign");
+      });
+
+      it("cancelling at the force confirm touches nothing on disk", async () => {
+        const foreignSkillMd = seedForeignAngularSkill();
+        const before = snapshotDir(claudeDir);
+        const prompter = makeFakePrompter([
+          "es",
+          true,
+          true,
+          CANCEL, // cancel right at the force-overwrite confirm
+        ]);
+
+        const report = await runInitInteractive({ force: true, prompter });
+
+        expect(report.exitCode).toBe(1);
+        expect(report.rows).toEqual([]);
+        expect(snapshotDir(claudeDir)).toEqual(before);
+        expect(readFileSync(join(claudeDir, "skills", "angular", "SKILL.md"), "utf-8")).toBe(foreignSkillMd);
+      });
+
+      it("declining (not just cancelling) the force confirm also touches nothing on disk", async () => {
+        const foreignSkillMd = seedForeignAngularSkill();
+        const before = snapshotDir(claudeDir);
+        const prompter = makeFakePrompter(["es", true, true, false]); // decline the force confirm
+
+        const report = await runInitInteractive({ force: true, prompter });
+
+        expect(report.exitCode).toBe(1);
+        expect(report.rows).toEqual([]);
+        expect(snapshotDir(claudeDir)).toEqual(before);
+        expect(readFileSync(join(claudeDir, "skills", "angular", "SKILL.md"), "utf-8")).toBe(foreignSkillMd);
+      });
+
+      it("no foreign files to overwrite → force never prompts, even with --force set", async () => {
+        // Nothing seeded: a fresh claudeDir has zero foreign motor paths.
+        let calls = 0;
+        const prompter = makeFakePrompter(["es", true, true, true]); // language, agents, hooks, final confirm — no force-confirm slot consumed
+        const wrapped: Prompter = {
+          ...prompter,
+          confirm: async (opts) => {
+            calls++;
+            return prompter.confirm(opts);
+          },
+        };
+
+        const report = await runInitInteractive({ force: true, prompter: wrapped });
+
+        expect(report.exitCode).toBe(0);
+        // installAgents + installHooks + final confirm = 3 confirm calls; no
+        // extra force-confirm call was made since there was nothing foreign.
+        expect(calls).toBe(3);
+      });
     });
 
     describe("navori voice takeover prompt", () => {

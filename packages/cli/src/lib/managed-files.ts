@@ -38,16 +38,34 @@ export function withFileMarker(content: string, version: string): string {
   return `${frontmatter}${marker}\n${rest}`;
 }
 
-export type FileStatus = "created" | "updated" | "unchanged" | "skipped-foreign";
+export type FileStatus = "created" | "updated" | "unchanged" | "skipped-foreign" | "overwritten-foreign";
+
+export interface WriteManagedFileOptions {
+  /**
+   * `argos init --force`: when the destination exists WITHOUT the
+   * ownership marker (foreign), overwrite it with the motor version instead
+   * of skipping it. The marker lands with this write, so a subsequent
+   * (non-forced) run treats the file as owned from then on. Default `false`
+   * — the pre-existing skip-foreign behavior.
+   */
+  force?: boolean;
+}
 
 /**
  * Write a full-file Argos-owned asset (agent, skill, output-style) to
  * `destPath`, honoring the ownership marker policy:
  * - absent → write it (created)
  * - present with the argos:file marker → overwrite (updated/unchanged)
- * - present without the marker (foreign) → never touch it (skipped-foreign)
+ * - present without the marker (foreign) → never touch it (skipped-foreign),
+ *   unless `options.force` is set, in which case it's overwritten
+ *   (overwritten-foreign) and stamped with the marker.
  */
-export function writeManagedFile(destPath: string, sourceContent: string, version: string): FileStatus {
+export function writeManagedFile(
+  destPath: string,
+  sourceContent: string,
+  version: string,
+  options: WriteManagedFileOptions = {},
+): FileStatus {
   const finalContent = withFileMarker(sourceContent, version);
 
   if (!existsSync(destPath)) {
@@ -57,7 +75,11 @@ export function writeManagedFile(destPath: string, sourceContent: string, versio
   }
 
   const current = readFileSync(destPath, "utf-8");
-  if (!hasArgosFileMarker(current)) return "skipped-foreign";
+  if (!hasArgosFileMarker(current)) {
+    if (!options.force) return "skipped-foreign";
+    writeFileAtomic(destPath, finalContent);
+    return "overwritten-foreign";
+  }
   if (current === finalContent) return "unchanged";
 
   writeFileAtomic(destPath, finalContent);
@@ -79,9 +101,16 @@ export function hasArgosShellFileMarker(content: string): boolean {
  * the result executable (0o755). Same ownership policy as `writeManagedFile`:
  * - absent → write it (created)
  * - present with the shell marker → overwrite (updated/unchanged)
- * - present without the marker (foreign) → never touch it (skipped-foreign)
+ * - present without the marker (foreign) → never touch it (skipped-foreign),
+ *   unless `options.force` is set, in which case it's overwritten
+ *   (overwritten-foreign) and stamped with the marker.
  */
-export function writeManagedShellFile(destPath: string, sourceContent: string, version: string): FileStatus {
+export function writeManagedShellFile(
+  destPath: string,
+  sourceContent: string,
+  version: string,
+  options: WriteManagedFileOptions = {},
+): FileStatus {
   const finalContent = sourceContent.replaceAll(SHELL_VERSION_PLACEHOLDER, version);
 
   if (!existsSync(destPath)) {
@@ -91,7 +120,11 @@ export function writeManagedShellFile(destPath: string, sourceContent: string, v
   }
 
   const current = readFileSync(destPath, "utf-8");
-  if (!hasArgosShellFileMarker(current)) return "skipped-foreign";
+  if (!hasArgosShellFileMarker(current)) {
+    if (!options.force) return "skipped-foreign";
+    writeFileAtomic(destPath, finalContent, 0o755);
+    return "overwritten-foreign";
+  }
 
   if (current === finalContent) {
     // Re-assert the executable bit even when content is unchanged, in case

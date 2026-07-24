@@ -111,7 +111,7 @@ function checkHookScripts(findings: DoctorFinding[], claudeDir: string, currentV
     if (!hasArgosShellFileMarker(content)) {
       findings.push({
         level: "info",
-        message: `archivo ajeno en hooks/${id}.sh — hay versión del motor disponible pero está bloqueada; muévelo o bórralo y corre argos init para instalarla.`,
+        message: `archivo ajeno en hooks/${id}.sh — hay versión del motor disponible pero está bloqueada; muévelo o bórralo y corre argos init para instalarla, o corre \`argos init --force\` para reemplazarlo (con backup).`,
       });
       continue;
     }
@@ -345,7 +345,7 @@ function checkMotor(findings: DoctorFinding[]): void {
     if (!hasArgosFileMarker(content)) {
       findings.push({
         level: "info",
-        message: `archivo ajeno en ${label} — hay versión del motor disponible pero está bloqueada; muévelo o bórralo y corre argos init para instalarla.`,
+        message: `archivo ajeno en ${label} — hay versión del motor disponible pero está bloqueada; muévelo o bórralo y corre argos init para instalarla, o corre \`argos init --force\` para reemplazarlo (con backup).`,
       });
     }
   }

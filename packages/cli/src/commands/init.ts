@@ -16,6 +16,7 @@ import { injectBlock, listBlocks } from "../lib/markers.js";
 import {
   type FileStatus,
   hasArgosFileMarker,
+  hasArgosShellFileMarker,
   writeManagedFile,
   writeManagedShellFile,
 } from "../lib/managed-files.js";
@@ -73,6 +74,19 @@ export interface InitOptions {
    * takeover prompt.
    */
   takeoverNavoriVoice?: boolean;
+  /**
+   * `argos init --force`: full-file motor assets (skills incl. every
+   * manifest subfile, agents, output-styles, hooks) that exist on disk
+   * WITHOUT an `argos:file` ownership marker — normally left untouched,
+   * reported `skipped-foreign` — get overwritten with the motor version
+   * instead, reported `overwritten-foreign`. The marker lands with the
+   * write, so a later (non-forced) `init` treats them as owned from then on.
+   * Does NOT cross into CLAUDE.md prose (managed-block injection stays
+   * own-blocks-only) or foreign `settings.json` entries (surgical merge is
+   * unchanged) — force only ever replaces whole files at motor paths.
+   * Default `false`.
+   */
+  force?: boolean;
 }
 
 export interface InitReport {
@@ -82,7 +96,14 @@ export interface InitReport {
   backupPath?: string;
 }
 
-const STATUS_COUNT_ORDER: InitRowStatus[] = ["created", "updated", "unchanged", "skipped-foreign", "error"];
+const STATUS_COUNT_ORDER: InitRowStatus[] = [
+  "created",
+  "updated",
+  "unchanged",
+  "skipped-foreign",
+  "overwritten-foreign",
+  "error",
+];
 
 function summarize(rows: InitRow[]): string {
   const counts: Record<InitRowStatus, number> = {
@@ -90,6 +111,7 @@ function summarize(rows: InitRow[]): string {
     updated: 0,
     unchanged: 0,
     "skipped-foreign": 0,
+    "overwritten-foreign": 0,
     error: 0,
   };
   for (const row of rows) counts[row.status]++;
@@ -125,6 +147,23 @@ function writePlainFile(destPath: string, sourceContent: string): FileStatus {
   return "updated";
 }
 
+/**
+ * `--force` counterpart to `writePlainFile`, used only for a supporting file
+ * (e.g. `references/core.md`) that lives under a skill directory whose
+ * `SKILL.md` was just detected as foreign (no `argos:file` marker). These
+ * plain subfiles never carry a marker of their own — the whole skill
+ * directory's ownership is decided once from `SKILL.md` (see the skills loop
+ * below) — so this always overwrites unconditionally: `overwritten-foreign`
+ * when something was already there to replace, `created` when the motor
+ * ships a subfile the foreign directory never had.
+ */
+function writeForcedPlainFile(destPath: string, sourceContent: string): FileStatus {
+  const existed = existsSync(destPath);
+  if (!existed) mkdirSync(dirname(destPath), { recursive: true });
+  writeFileAtomic(destPath, sourceContent);
+  return existed ? "overwritten-foreign" : "created";
+}
+
 /** Inject one managed CLAUDE.md block, reporting created/updated/unchanged. */
 function injectAndReport(claudeMd: string, id: string, version: string, content: string) {
   const hadBlock = listBlocks(claudeMd).some((b) => b.id === id);
@@ -143,6 +182,7 @@ export function runInit(options: InitOptions = {}): InitReport {
   const language = options.language ?? "es";
   const installAgents = options.installAgents ?? true;
   const installHooks = options.installHooks ?? true;
+  const force = options.force ?? false;
   const version = readCliVersion();
   const claudeDir = resolveClaudeDir();
   const assetsDir = resolveAssetsDir();
@@ -192,7 +232,7 @@ export function runInit(options: InitOptions = {}): InitReport {
     const source = readAsset(assetsDir, ...relPath);
     const dest = join(claudeDir, ...relPath);
     try {
-      const status = writeManagedFile(dest, source, version);
+      const status = writeManagedFile(dest, source, version, { force });
       rows.push({ path: join(...relPath), status });
     } catch (err) {
       rows.push({ path: join(...relPath), status: "error", detail: errorMessage(err) });
@@ -206,7 +246,11 @@ export function runInit(options: InitOptions = {}): InitReport {
   //   file the skill ships.
   // - SKILL.md present WITHOUT the marker (foreign/user-modified) → skip
   //   every file under that skill dir, untouched — same policy as a single
-  //   foreign full-file asset above, extended to the whole directory.
+  //   foreign full-file asset above, extended to the whole directory. Under
+  //   `--force`, every file in that directory is overwritten instead
+  //   (`overwritten-foreign`) — SKILL.md gets its marker stamped via
+  //   `writeManagedFile`'s own `force` path, and each plain subfile is
+  //   force-written via `writeForcedPlainFile` (see its own doc comment).
   for (const skillId of listSkillIds(assetsDir)) {
     const skillMdDest = join(claudeDir, "skills", skillId, "SKILL.md");
     const isForeignSkill = existsSync(skillMdDest) && !hasArgosFileMarker(readFileSync(skillMdDest, "utf-8"));
@@ -215,7 +259,7 @@ export function runInit(options: InitOptions = {}): InitReport {
       const relParts = relFile.split("/");
       const relPath = join("skills", skillId, ...relParts);
 
-      if (isForeignSkill) {
+      if (isForeignSkill && !force) {
         rows.push({ path: relPath, status: "skipped-foreign" });
         continue;
       }
@@ -223,7 +267,12 @@ export function runInit(options: InitOptions = {}): InitReport {
       const source = readAsset(assetsDir, "skills", skillId, ...relParts);
       const dest = join(claudeDir, "skills", skillId, ...relParts);
       try {
-        const status = relFile === "SKILL.md" ? writeManagedFile(dest, source, version) : writePlainFile(dest, source);
+        const status =
+          relFile === "SKILL.md"
+            ? writeManagedFile(dest, source, version, { force })
+            : isForeignSkill
+              ? writeForcedPlainFile(dest, source)
+              : writePlainFile(dest, source);
         rows.push({ path: relPath, status });
       } catch (err) {
         rows.push({ path: relPath, status: "error", detail: errorMessage(err) });
@@ -250,7 +299,7 @@ export function runInit(options: InitOptions = {}): InitReport {
       const source = readAsset(assetsDir, ...relPath);
       const dest = join(claudeDir, ...relPath);
       try {
-        const status = writeManagedShellFile(dest, source, version);
+        const status = writeManagedShellFile(dest, source, version, { force });
         rows.push({ path: join(...relPath), status });
         hookWriteFailed.set(id, false);
       } catch (err) {
@@ -366,6 +415,55 @@ function peekOutputStyleValue(settingsPath: string): unknown {
 }
 
 /**
+ * Read-only `--force` pre-flight: counts how many on-disk paths at motor
+ * paths (output-style, agents, skills incl. every manifest subfile, hooks)
+ * are foreign (no `argos:file`/shell marker) and would therefore be
+ * overwritten by a forced `runInit`. Used only by the interactive wizard to
+ * size its confirm prompt — the actual overwrite decision and write happen
+ * inside `runInit` itself, independently, so this can never drift into
+ * writing anything. Mirrors the same directory-ownership rule `runInit`'s
+ * own skills loop uses (SKILL.md's marker decides the whole directory), and
+ * — like `doctor.ts`'s own read-only checks — intentionally duplicates that
+ * iteration shape rather than sharing private state with the writer.
+ */
+function countForceOverwrites(
+  claudeDir: string,
+  assetsDir: string,
+  installAgents: boolean,
+  installHooks: boolean,
+): number {
+  let count = 0;
+
+  const fullFiles: string[][] = [
+    ["output-styles", "argos.md"],
+    ...(installAgents ? listAgentIds(assetsDir).map((id) => ["agents", `${id}.md`]) : []),
+  ];
+  for (const relPath of fullFiles) {
+    const dest = join(claudeDir, ...relPath);
+    if (existsSync(dest) && !hasArgosFileMarker(readFileSync(dest, "utf-8"))) count++;
+  }
+
+  for (const skillId of listSkillIds(assetsDir)) {
+    const skillMdDest = join(claudeDir, "skills", skillId, "SKILL.md");
+    const isForeignSkill = existsSync(skillMdDest) && !hasArgosFileMarker(readFileSync(skillMdDest, "utf-8"));
+    if (!isForeignSkill) continue;
+    for (const relFile of listSkillFiles(assetsDir, skillId)) {
+      const dest = join(claudeDir, "skills", skillId, ...relFile.split("/"));
+      if (existsSync(dest)) count++;
+    }
+  }
+
+  if (installHooks) {
+    for (const id of HOOK_IDS) {
+      const dest = join(claudeDir, "hooks", `${id}.sh`);
+      if (existsSync(dest) && !hasArgosShellFileMarker(readFileSync(dest, "utf-8"))) count++;
+    }
+  }
+
+  return count;
+}
+
+/**
  * Interactive layer over `runInit` (spec 0004 F5 "argos init"). A pure
  * additive wrapper — the core `runInit` never changes behavior or contract.
  * Without a real TTY, or with `--yes`, this delegates to `runInit(options)`
@@ -416,6 +514,27 @@ export async function runInitInteractive(options: InitInteractiveOptions = {}): 
 
   const claudeDir = resolveClaudeDir();
 
+  // `--force` pre-flight (see `InitOptions.force`'s doc comment): flag-driven,
+  // not itself a wizard question. When active, count how many on-disk paths
+  // are foreign and about to be overwritten (read-only — see
+  // `countForceOverwrites`) and, only if that count is > 0, require an
+  // explicit confirm before proceeding. Zero foreign paths means force has
+  // nothing to do this run, so no extra prompt.
+  const force = options.force ?? false;
+  if (force) {
+    const foreignCount = countForceOverwrites(claudeDir, resolveAssetsDir(), installAgents, installHooks);
+    if (foreignCount > 0) {
+      const confirmForce = await prompter.confirm({
+        message: `${foreignCount} archivos ajenos serán sobrescritos por versiones del motor — backup previo en ~/.argos/backups. ¿Continuar?`,
+        initialValue: false,
+      });
+      if (prompter.isCancel(confirmForce) || !confirmForce) {
+        prompter.cancel("argos init cancelado — no se tocó nada.");
+        return cancelledInitReport();
+      }
+    }
+  }
+
   // Voice activation (spec 0004): if the current settings.json.outputStyle
   // matches the predecessor harness's voice, ask before taking it over —
   // this peek is read-only and never writes; the actual takeover only
@@ -457,6 +576,7 @@ export async function runInitInteractive(options: InitInteractiveOptions = {}): 
     installAgents,
     installHooks,
     takeoverNavoriVoice,
+    force,
   });
   prompter.outro(report.summary);
   return report;
@@ -479,15 +599,27 @@ export const initCommand = defineCommand({
       default: false,
       description: "Fuerza modo no interactivo aunque haya una TTY real (defaults + flags, sin wizard).",
     },
+    force: {
+      type: "boolean",
+      default: false,
+      description:
+        "Sobrescribe con la versión del motor los archivos ajenos (sin marker argos) en agents/skills/output-styles/hooks. No toca prosa ajena de CLAUDE.md ni entradas ajenas de settings.json.",
+    },
   },
   async run({ args }) {
-    const report = await runInitInteractive({ language: args.language as "es" | "en", yes: Boolean(args.yes) });
+    const report = await runInitInteractive({
+      language: args.language as "es" | "en",
+      yes: Boolean(args.yes),
+      force: Boolean(args.force),
+    });
 
     const colorize = (status: InitRowStatus): string => {
       const padded = status.padEnd(18);
       switch (status) {
         case "skipped-foreign":
           return pc.yellow(padded);
+        case "overwritten-foreign":
+          return pc.magenta(padded);
         case "created":
           return pc.green(padded);
         case "updated":

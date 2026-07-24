@@ -224,7 +224,9 @@ describe("runDoctor", () => {
           f.level === "info" &&
           f.message.includes(`archivo ajeno en ${label}`) &&
           /hay versión del motor disponible pero está bloqueada/.test(f.message) &&
-          /argos init/.test(f.message),
+          /argos init/.test(f.message) &&
+          /argos init --force/.test(f.message) &&
+          /con backup/.test(f.message),
       ),
     ).toBe(true);
   });

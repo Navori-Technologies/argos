@@ -105,6 +105,51 @@ describe("writeManagedFile", () => {
     const residue = readdirSync(dir).filter((f) => f.includes(".tmp"));
     expect(residue).toEqual([]);
   });
+
+  describe("force", () => {
+    it("overwrites a foreign file and stamps the marker, reporting overwritten-foreign", () => {
+      const dest = join(dir, "SKILL.md");
+      const foreignContent = "Hand-written, no marker.\n";
+      writeFileSync(dest, foreignContent, "utf-8");
+
+      const status = writeManagedFile(dest, "Argos content.\n", "1.0.0", { force: true });
+
+      expect(status).toBe("overwritten-foreign");
+      const written = readFileSync(dest, "utf-8");
+      expect(written).toContain("Argos content.");
+      expect(written).toContain('<!-- argos:file v="1.0.0" -->');
+    });
+
+    it("a subsequent non-forced run treats the now-marked file as owned (updated/unchanged, never skipped-foreign again)", () => {
+      const dest = join(dir, "SKILL.md");
+      writeFileSync(dest, "Hand-written, no marker.\n", "utf-8");
+      writeManagedFile(dest, "Argos content.\n", "1.0.0", { force: true });
+
+      const status = writeManagedFile(dest, "Argos content.\n", "1.0.0");
+
+      expect(status).toBe("unchanged");
+    });
+
+    it("without force, an existing foreign file is still just skipped-foreign (default behavior unchanged)", () => {
+      const dest = join(dir, "SKILL.md");
+      const foreignContent = "Hand-written, no marker.\n";
+      writeFileSync(dest, foreignContent, "utf-8");
+
+      const status = writeManagedFile(dest, "Argos content.\n", "1.0.0", { force: false });
+
+      expect(status).toBe("skipped-foreign");
+      expect(readFileSync(dest, "utf-8")).toBe(foreignContent);
+    });
+
+    it("force has no effect on an already-owned file — still updated/unchanged, never overwritten-foreign", () => {
+      const dest = join(dir, "SKILL.md");
+      writeManagedFile(dest, "Body v1.\n", "1.0.0");
+
+      const status = writeManagedFile(dest, "Body v2.\n", "1.1.0", { force: true });
+
+      expect(status).toBe("updated");
+    });
+  });
 });
 
 describe("hasArgosShellFileMarker", () => {
@@ -181,5 +226,31 @@ describe("writeManagedShellFile", () => {
 
     expect(status).toBe("unchanged");
     expect(statSync(dest).mode & 0o777).toBe(0o755);
+  });
+
+  describe("force", () => {
+    it("overwrites a foreign hook script and stamps the marker, reporting overwritten-foreign", () => {
+      const dest = join(dir, "hook.sh");
+      const foreignContent = "#!/usr/bin/env bash\necho hand-written\n";
+      writeFileSync(dest, foreignContent, "utf-8");
+
+      const status = writeManagedShellFile(dest, source, "1.0.0", { force: true });
+
+      expect(status).toBe("overwritten-foreign");
+      const written = readFileSync(dest, "utf-8");
+      expect(written).toContain('# argos:file v="1.0.0"');
+      expect(statSync(dest).mode & 0o777).toBe(0o755);
+    });
+
+    it("without force, an existing foreign hook script is still just skipped-foreign", () => {
+      const dest = join(dir, "hook.sh");
+      const foreignContent = "#!/usr/bin/env bash\necho hand-written\n";
+      writeFileSync(dest, foreignContent, "utf-8");
+
+      const status = writeManagedShellFile(dest, source, "1.0.0", { force: false });
+
+      expect(status).toBe("skipped-foreign");
+      expect(readFileSync(dest, "utf-8")).toBe(foreignContent);
+    });
   });
 });
