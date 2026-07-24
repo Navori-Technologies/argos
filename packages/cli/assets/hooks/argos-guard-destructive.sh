@@ -78,7 +78,7 @@ fi
 block() {
   echo "[argos] BLOQUEADO por argos-guard-destructive: $1" >&2
   echo "[argos] comando: $cmd" >&2
-  echo "[argos] si es intencional, corre el comando vos mismo fuera del agente." >&2
+  echo "[argos] si es intencional, corre el comando tú mismo fuera del agente." >&2
   exit 2
 }
 

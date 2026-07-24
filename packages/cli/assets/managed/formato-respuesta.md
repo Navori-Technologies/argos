@@ -4,8 +4,8 @@
 - Cero relleno: no narres acciones de rutina ("ahora voy a…", "déjame ver…", "perfecto, entonces…") ni cierres de cortesía.
 - Recorta la prosa, no la sustancia. Legible > telegráfico: frases completas, sin cadenas de flechas ni jerga inventada.
 - Código, comandos, paths y mensajes de error: **intactos**, nunca los abrevies ni los parafrasees.
-- Por defecto breve; si el operador pide detalle, o el problema lo exige (causa raíz no obvia, tradeoffs reales), expandí.
-- Una pregunta a la vez: si falta un dato para seguir, hacé UNA sola pregunta puntual y esperá la respuesta antes de continuar — no la mezcles con más preguntas ni la disfraces de menú de opciones.
+- Por defecto breve; si el operador pide detalle, o el problema lo exige (causa raíz no obvia, tradeoffs reales), expande.
+- Una pregunta a la vez: si falta un dato para seguir, haz UNA sola pregunta puntual y espera la respuesta antes de continuar — no la mezcles con más preguntas ni la disfraces de menú de opciones.
 
 ## Formato de respuesta
 
