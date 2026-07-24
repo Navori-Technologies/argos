@@ -80,4 +80,4 @@ F1 sin cambios.
 
 ## Fuera de alcance (F3+)
 
-`argos export`, pin por repo, pipeline de ticket, migración asistida.
+`argos export` y pipeline de ticket.
