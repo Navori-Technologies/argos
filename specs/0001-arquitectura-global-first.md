@@ -73,6 +73,14 @@ artefactos versionables — CLAUDE.md con gates resueltos, `.claude/` mínimo,
 - El export lleva markers `argos:managed` con versión, igual que todo lo que
   Argos escribe.
 
+El export es además el **mecanismo de pin por repo**: exportar congela el
+estado compilado del harness en ese repo (versionado en su git, revisable por
+PR, con rollback). La ficha declara el pin y las reglas del export mandan en
+ese repo (patrón de deferencia del motor). Un repo pinneado re-crea la doble
+capa a propósito y `doctor` lo reporta con versiones (motor vs export). En
+repos no exportados el control de versión del motor es por máquina — no
+existe rollout gradual por repo, por definición de fuente única.
+
 ## Capas
 
 | Capa | Contenido | Se actualiza |
