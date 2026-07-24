@@ -1,6 +1,7 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
+import { writeFileAtomic } from "./atomic-write.js";
 
 export const CONFIG_FILENAME = "argos.config.json";
 
@@ -48,7 +49,7 @@ export function readConfig(repoDir: string): ArgosConfig {
 export function writeConfig(repoDir: string, config: ArgosConfigInput): void {
   const validated = ArgosConfigSchema.parse(config);
   const configPath = join(repoDir, CONFIG_FILENAME);
-  writeFileSync(configPath, `${JSON.stringify(validated, null, 2)}\n`, "utf-8");
+  writeFileAtomic(configPath, `${JSON.stringify(validated, null, 2)}\n`);
 }
 
 /** True when `argos.config.json` exists in a repo directory. */

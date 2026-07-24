@@ -1,8 +1,15 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { hasArgosFileMarker, withFileMarker, writeManagedFile } from "./managed-files.js";
+import {
+  hasArgosFileMarker,
+  hasArgosShellFileMarker,
+  SHELL_VERSION_PLACEHOLDER,
+  withFileMarker,
+  writeManagedFile,
+  writeManagedShellFile,
+} from "./managed-files.js";
 
 describe("hasArgosFileMarker", () => {
   it("is true when the marker is present, regardless of version", () => {
@@ -88,5 +95,91 @@ describe("writeManagedFile", () => {
 
     expect(status).toBe("skipped-foreign");
     expect(readFileSync(dest, "utf-8")).toBe(foreignContent);
+  });
+
+  it("leaves no .tmp file behind after a write (atomic write, see lib/atomic-write.ts)", () => {
+    const dest = join(dir, "SKILL.md");
+    writeManagedFile(dest, "Body.\n", "1.0.0");
+    writeManagedFile(dest, "Body v2.\n", "1.1.0"); // updated path too
+
+    const residue = readdirSync(dir).filter((f) => f.includes(".tmp"));
+    expect(residue).toEqual([]);
+  });
+});
+
+describe("hasArgosShellFileMarker", () => {
+  it("is true when the shell-comment marker is present, regardless of version", () => {
+    expect(hasArgosShellFileMarker('#!/usr/bin/env bash\n# argos:file v="1.0.0"\necho hi\n')).toBe(true);
+  });
+
+  it("is false for a foreign shell script with no marker", () => {
+    expect(hasArgosShellFileMarker("#!/usr/bin/env bash\necho hi\n")).toBe(false);
+  });
+
+  it("is false for the HTML-comment marker form (a different asset kind)", () => {
+    expect(hasArgosShellFileMarker('<!-- argos:file v="1.0.0" -->\ncontent')).toBe(false);
+  });
+});
+
+describe("writeManagedShellFile", () => {
+  let dir: string;
+  const source = `#!/usr/bin/env bash\n# argos:file v="${SHELL_VERSION_PLACEHOLDER}"\necho hi\n`;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "argos-managed-shell-"));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("creates a new file, stamps the real version, and chmods it executable", () => {
+    const dest = join(dir, "hooks", "argos-guard-destructive.sh");
+    const status = writeManagedShellFile(dest, source, "1.2.3");
+
+    expect(status).toBe("created");
+    const content = readFileSync(dest, "utf-8");
+    expect(content).toContain('# argos:file v="1.2.3"');
+    expect(content).not.toContain(SHELL_VERSION_PLACEHOLDER);
+    expect(statSync(dest).mode & 0o777).toBe(0o755);
+  });
+
+  it("reports unchanged when the destination already has identical stamped content", () => {
+    const dest = join(dir, "hook.sh");
+    writeManagedShellFile(dest, source, "1.0.0");
+    const status = writeManagedShellFile(dest, source, "1.0.0");
+
+    expect(status).toBe("unchanged");
+  });
+
+  it("reports updated and overwrites when the stamped version differs", () => {
+    const dest = join(dir, "hook.sh");
+    writeManagedShellFile(dest, source, "1.0.0");
+    const status = writeManagedShellFile(dest, source, "1.1.0");
+
+    expect(status).toBe("updated");
+    expect(readFileSync(dest, "utf-8")).toContain('# argos:file v="1.1.0"');
+  });
+
+  it("reports skipped-foreign and never touches a shell script without the marker", () => {
+    const dest = join(dir, "hook.sh");
+    const foreignContent = "#!/usr/bin/env bash\necho hand-written\n";
+    writeFileSync(dest, foreignContent, "utf-8");
+
+    const status = writeManagedShellFile(dest, source, "1.0.0");
+
+    expect(status).toBe("skipped-foreign");
+    expect(readFileSync(dest, "utf-8")).toBe(foreignContent);
+  });
+
+  it("re-asserts the executable bit even when content is unchanged", () => {
+    const dest = join(dir, "hook.sh");
+    writeManagedShellFile(dest, source, "1.0.0");
+    chmodSync(dest, 0o644); // simulate drift (e.g. a user ran chmod -x)
+
+    const status = writeManagedShellFile(dest, source, "1.0.0");
+
+    expect(status).toBe("unchanged");
+    expect(statSync(dest).mode & 0o777).toBe(0o755);
   });
 });
