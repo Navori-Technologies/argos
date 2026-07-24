@@ -1,8 +1,21 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createBackup } from "./backup.js";
+
+const cpSyncMock = vi.fn();
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...actual,
+    cpSync: (...args: Parameters<typeof actual.cpSync>) => {
+      if (cpSyncMock.getMockImplementation()) return cpSyncMock(...args);
+      return actual.cpSync(...args);
+    },
+  };
+});
 
 describe("createBackup", () => {
   let claudeDir: string;
@@ -45,5 +58,22 @@ describe("createBackup", () => {
     const first = createBackup(claudeDir, ["CLAUDE.md"]);
     const second = createBackup(claudeDir, ["CLAUDE.md"]);
     expect(first).not.toBe(second);
+  });
+
+  it("removes the partial backup directory and rethrows when cpSync fails", () => {
+    const cpSyncError = new Error("EACCES: permission denied");
+    cpSyncMock.mockImplementation(() => {
+      throw cpSyncError;
+    });
+
+    try {
+      expect(() => createBackup(claudeDir, ["CLAUDE.md"])).toThrow(cpSyncError);
+    } finally {
+      cpSyncMock.mockReset();
+    }
+
+    const backupsRoot = join(argosHome, "backups");
+    const remaining = existsSync(backupsRoot) ? readdirSync(backupsRoot) : [];
+    expect(remaining).toHaveLength(0);
   });
 });

@@ -1,18 +1,39 @@
 {
-  "name": "@argos/cli",
-  "version": "0.0.0",
-  "private": true,
+  "name": "argos-harness",
+  "version": "0.1.0",
   "type": "module",
-  "description": "Argos CLI — global-first harness for Claude Code",
+  "description": "Argos — global-first CLI harness for setting up and managing Claude Code across your projects",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Navori-Technologies/argos.git"
+  },
+  "homepage": "https://github.com/Navori-Technologies/argos#readme",
+  "bugs": {
+    "url": "https://github.com/Navori-Technologies/argos/issues"
+  },
+  "keywords": [
+    "claude",
+    "claude-code",
+    "cli",
+    "ai",
+    "harness",
+    "agents",
+    "anthropic"
+  ],
   "bin": {
-    "argos": "./dist/index.js"
+    "argos": "./bin/argos.js"
   },
   "files": [
     "dist",
-    "assets"
+    "assets",
+    "bin"
   ],
   "engines": {
     "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "dependencies": {
     "@clack/prompts": "^1.7.0",

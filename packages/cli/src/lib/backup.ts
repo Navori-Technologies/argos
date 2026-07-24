@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { cpSync, existsSync, mkdirSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { resolveArgosHome } from "./paths.js";
 
@@ -18,12 +18,17 @@ export function createBackup(claudeDir: string, entries: string[]): string {
   const backupDir = join(resolveArgosHome(), "backups", `${timestamp}-${suffix}`);
   mkdirSync(backupDir, { recursive: true });
 
-  for (const entry of entries) {
-    const src = join(claudeDir, entry);
-    if (!existsSync(src)) continue;
-    const dest = join(backupDir, entry);
-    mkdirSync(dirname(dest), { recursive: true });
-    cpSync(src, dest, { recursive: true });
+  try {
+    for (const entry of entries) {
+      const src = join(claudeDir, entry);
+      if (!existsSync(src)) continue;
+      const dest = join(backupDir, entry);
+      mkdirSync(dirname(dest), { recursive: true });
+      cpSync(src, dest, { recursive: true });
+    }
+  } catch (error) {
+    rmSync(backupDir, { recursive: true, force: true });
+    throw error;
   }
 
   return backupDir;

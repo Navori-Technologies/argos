@@ -290,4 +290,55 @@ describe("runInit", () => {
       expect(readFileSync(join(claudeDir, "settings.json"), "utf-8")).toBe(corrupt);
     });
   });
+
+  describe("skill directories (not just SKILL.md)", () => {
+    it("installs supporting files under a skill's references/ and phases/ subdirectories, not just SKILL.md", () => {
+      const report = runInit();
+      expect(report.exitCode).toBe(0);
+
+      const angularCorePath = join(claudeDir, "skills", "angular", "references", "core.md");
+      const appBuilderPhasePath = join(claudeDir, "skills", "app-builder", "phases", "0-product.md");
+      expect(existsSync(angularCorePath)).toBe(true);
+      expect(existsSync(appBuilderPhasePath)).toBe(true);
+
+      expect(
+        report.rows.some((r) => r.path === join("skills", "angular", "references", "core.md") && r.status === "created"),
+      ).toBe(true);
+      expect(
+        report.rows.some(
+          (r) => r.path === join("skills", "app-builder", "phases", "0-product.md") && r.status === "created",
+        ),
+      ).toBe(true);
+    });
+
+    it("is idempotent for skill supporting files — a second run reports them unchanged, no duplication", () => {
+      runInit();
+      const second = runInit();
+
+      expect(second.exitCode).toBe(0);
+      const angularCoreRow = second.rows.find((r) => r.path === join("skills", "angular", "references", "core.md"));
+      expect(angularCoreRow?.status).toBe("unchanged");
+
+      // No duplicate rows for the same file.
+      const matching = second.rows.filter((r) => r.path === join("skills", "angular", "references", "core.md"));
+      expect(matching).toHaveLength(1);
+    });
+
+    it("skips the WHOLE skill directory (SKILL.md + supporting files) when SKILL.md is foreign", () => {
+      const skillDir = join(claudeDir, "skills", "angular");
+      mkdirSync(skillDir, { recursive: true });
+      const foreignSkillMd = "---\nname: angular\n---\n\nMy own hand-written skill.\n";
+      writeFileSync(join(skillDir, "SKILL.md"), foreignSkillMd, "utf-8");
+
+      const report = runInit();
+
+      const skillMdRow = report.rows.find((r) => r.path === join("skills", "angular", "SKILL.md"));
+      expect(skillMdRow?.status).toBe("skipped-foreign");
+      expect(readFileSync(join(skillDir, "SKILL.md"), "utf-8")).toBe(foreignSkillMd);
+
+      const coreRow = report.rows.find((r) => r.path === join("skills", "angular", "references", "core.md"));
+      expect(coreRow?.status).toBe("skipped-foreign");
+      expect(existsSync(join(skillDir, "references", "core.md"))).toBe(false);
+    });
+  });
 });

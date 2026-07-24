@@ -44,3 +44,26 @@ export function listSkillIds(assetsDir: string): string[] {
     .map((entry) => entry.name)
     .sort();
 }
+
+/**
+ * Recursively list every file shipped under a skill's asset directory
+ * (`assets/skills/<skillId>/`), as relative paths from that directory with
+ * forward slashes regardless of platform (e.g. `SKILL.md`,
+ * `references/core.md`, `phases/0-product.md`). Sorted for deterministic
+ * output. Some skills are a single `SKILL.md`; ~15 also ship load-bearing
+ * subdirectories (`references/`, `phases/`, `assets/`) that this walks too —
+ * without it, only `SKILL.md` would ever reach the user's `~/.claude/skills`.
+ */
+export function listSkillFiles(assetsDir: string, skillId: string): string[] {
+  const root = join(assetsDir, "skills", skillId);
+  const out: string[] = [];
+  const walk = (dir: string, prefix: string) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) walk(join(dir, entry.name), rel);
+      else out.push(rel);
+    }
+  };
+  walk(root, "");
+  return out.sort();
+}

@@ -1,9 +1,10 @@
 import { defineCommand } from "citty";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import pc from "picocolors";
 import {
   listAgentIds,
+  listSkillFiles,
   listSkillIds,
   MANAGED_BLOCK_IDS,
   readAsset,
@@ -12,7 +13,12 @@ import {
 import { writeFileAtomic } from "../lib/atomic-write.js";
 import { createBackup } from "../lib/backup.js";
 import { injectBlock, listBlocks } from "../lib/markers.js";
-import { type FileStatus, writeManagedFile, writeManagedShellFile } from "../lib/managed-files.js";
+import {
+  type FileStatus,
+  hasArgosFileMarker,
+  writeManagedFile,
+  writeManagedShellFile,
+} from "../lib/managed-files.js";
 import { resolveArgosHome, resolveClaudeDir } from "../lib/paths.js";
 import { type ArgosHookSpec, mergeHooksIntoSettings } from "../lib/settings-merge.js";
 import { readCliVersion } from "../lib/version.js";
@@ -74,6 +80,29 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/**
+ * Write a plain (unmarked) supporting file belonging to an already
+ * ownership-checked skill directory — e.g. `references/core.md`,
+ * `phases/0-product.md`. Unlike `writeManagedFile`, this never carries or
+ * checks the `argos:file` marker itself: ownership for the whole skill
+ * directory is decided once, up front, from its `SKILL.md` (see the skills
+ * loop in `runInit`), so per-file marker bookkeeping here would be
+ * redundant. Reports the same created/updated/unchanged statuses.
+ */
+function writePlainFile(destPath: string, sourceContent: string): FileStatus {
+  if (!existsSync(destPath)) {
+    mkdirSync(dirname(destPath), { recursive: true });
+    writeFileAtomic(destPath, sourceContent);
+    return "created";
+  }
+
+  const current = readFileSync(destPath, "utf-8");
+  if (current === sourceContent) return "unchanged";
+
+  writeFileAtomic(destPath, sourceContent);
+  return "updated";
+}
+
 /** Inject one managed CLAUDE.md block, reporting created/updated/unchanged. */
 function injectAndReport(claudeMd: string, id: string, version: string, content: string) {
   const hadBlock = listBlocks(claudeMd).some((b) => b.id === id);
@@ -127,11 +156,10 @@ export function runInit(options: InitOptions = {}): InitReport {
     for (const id of MANAGED_BLOCK_IDS) rows.push({ path: `CLAUDE.md#${id}`, status: "error", detail });
   }
 
-  // 2. Full-file assets: output-style, agents, skills.
+  // 2. Full-file assets: output-style, agents.
   const fullFiles: string[][] = [
     ["output-styles", "argos.md"],
     ...listAgentIds(assetsDir).map((id) => ["agents", `${id}.md`]),
-    ...listSkillIds(assetsDir).map((id) => ["skills", id, "SKILL.md"]),
   ];
   for (const relPath of fullFiles) {
     const source = readAsset(assetsDir, ...relPath);
@@ -141,6 +169,38 @@ export function runInit(options: InitOptions = {}): InitReport {
       rows.push({ path: join(...relPath), status });
     } catch (err) {
       rows.push({ path: join(...relPath), status: "error", detail: errorMessage(err) });
+    }
+  }
+
+  // 2a. Skills: each skill directory (SKILL.md plus any `references/`,
+  // `phases/`, `assets/`, etc. it ships) is installed as a single unit.
+  // Ownership sentinel is SKILL.md's `argos:file` marker:
+  // - SKILL.md absent, or present WITH the marker → install/update every
+  //   file the skill ships.
+  // - SKILL.md present WITHOUT the marker (foreign/user-modified) → skip
+  //   every file under that skill dir, untouched — same policy as a single
+  //   foreign full-file asset above, extended to the whole directory.
+  for (const skillId of listSkillIds(assetsDir)) {
+    const skillMdDest = join(claudeDir, "skills", skillId, "SKILL.md");
+    const isForeignSkill = existsSync(skillMdDest) && !hasArgosFileMarker(readFileSync(skillMdDest, "utf-8"));
+
+    for (const relFile of listSkillFiles(assetsDir, skillId)) {
+      const relParts = relFile.split("/");
+      const relPath = join("skills", skillId, ...relParts);
+
+      if (isForeignSkill) {
+        rows.push({ path: relPath, status: "skipped-foreign" });
+        continue;
+      }
+
+      const source = readAsset(assetsDir, "skills", skillId, ...relParts);
+      const dest = join(claudeDir, "skills", skillId, ...relParts);
+      try {
+        const status = relFile === "SKILL.md" ? writeManagedFile(dest, source, version) : writePlainFile(dest, source);
+        rows.push({ path: relPath, status });
+      } catch (err) {
+        rows.push({ path: relPath, status: "error", detail: errorMessage(err) });
+      }
     }
   }
 
