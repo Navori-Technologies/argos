@@ -53,6 +53,7 @@ Donde `$pr_target` es el valor de `prTarget` leído del `argos.config.json` del 
 
 - **NUNCA `git push --force`** ni `--no-verify` sin que lo pida el usuario.
 - **Siempre `--base` contra la `prTarget` resuelta del repo.** No la hardcodees ni la asumas de una sesión anterior; si el target del repo cambió, corrígelo en `argos.config.json` (por ejemplo con `argos adopt --refresh` si cambiaron los hechos del repo, o editándolo directo).
+- **Convención de la organización: los PRs van contra `develop`.** Si el repo tiene rama `develop` remota y su `prTarget` no es `develop`, detente y señálalo antes de abrir el PR — probablemente la config está desactualizada, no la convención. Solo un repo SIN rama `develop` puede tener PRs contra su rama default. Si la rama del feature se bifurcó de otra base y `develop` diverge, el PR se retarget con `git rebase --onto origin/develop <base-original>` (solo los commits del feature), nunca con un rebase plano que arrastre commits ajenos.
 - **Cambios uncommitted ajenos al feature** → párate y pregunta, no los arrastres al PR.
 - **Nunca un PR sin confirmación de que el cambio funciona** en el flujo real (check 6 del pre-flight). Un "Test plan" con casillas sin marcar no es evidencia — es deuda que el PR no debe cargar de origen.
 - **Reviewers/labels**: no los agregues automático salvo que el usuario lo pida.

@@ -18,6 +18,10 @@ Al empezar a trabajar sobre un repo, corre este checklist antes de la tarea:
    `argos.config.json` → menciona que `argos adopt` puede importarlo
    directamente (nombre, quality gate, áreas críticas, workspace), así el
    usuario no tiene que repetir hechos que el repo ya declara en otro lado.
+5. El repo tiene rama `develop` remota pero su `prTarget` (config/ficha) no
+   es `develop` → señálalo y corrige la config: la convención de la
+   organización es que los PRs SIEMPRE van contra `develop`; solo repos sin
+   rama `develop` abren PRs contra su rama default.
 
 El motor (agentes, skills, hooks) vive una sola vez a nivel usuario en
 `~/.claude`; esta capa es aterrizaje y datos del repo, no maquinaria — la
