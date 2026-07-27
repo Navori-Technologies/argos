@@ -49,6 +49,10 @@ Abre ese archivo puntual y confirma que su veredicto es `APPROVED` y que su secc
 
 Archivo ausente, ambiguo (más de un candidato) o con veredicto/scope que no matchea la feature actual → NO cuenta como aprobado: abort, dile al usuario que falta review y nunca asumas un `APPROVED` genérico.
 
+**Confirmación funcional del cambio** (harness activo): abre `.claude/progress/impl_<feature>.md` y confirma que registra que el cambio FUNCIONA en el flujo afectado — smoke del endpoint, verificación conducida en navegador, o confirmación explícita del operador. Si declara "UI no validada", "QA pendiente" o no registra verificación funcional → abort: el PR no se abre; reporta que falta la confirmación funcional. El quality gate estático (lint/tests/build) y el `APPROVED` del review NO sustituyen este check.
+
+<!-- Mantén este check de confirmación funcional en sync con `skills/pr-create.md` (check 6 del pre-flight, misma semántica de abort). -->
+
 ## Flujo de commit (si hay cambios sin commitear)
 
 1. Lee `.claude/progress/impl_<feature>.md` para entender qué cambió y por qué.

@@ -17,7 +17,11 @@ Antes de tocar el ticket, verifica el contexto del repo. No asumas nada de sesio
 2. **`argos.config.json` presente**: si falta, sugiere correr `argos adopt`. Nunca lo corras unilateralmente — propónlo y espera confirmación explícita del usuario.
 3. **Ficha fresca**: si la ficha del repo (el CLAUDE.md delgado) se ve desactualizada, o el stack/las dependencias del repo divergieron de lo que declara (nueva librería, otro quality gate, otro framework), sugiere `argos adopt --refresh`.
 4. **Repo no clonado**: si el ticket referencia un repo que todavía no existe en esta máquina, primero clónalo respetando las reglas de identidad — el remote debe usar el alias SSH que matchea el workspace correcto (`bonum` / `personal`, según las match rules por remote/path registradas en `~/.argos/workspaces.json`) — y recién ahí corre `argos adopt`.
-5. **Triage propiamente dicho**: `mem_search`, `cat progress/current.md`, `git status`/`git log`. Trivial (≤1 archivo, ≤5 líneas, sin lógica) → salta directo a Fase 5. Si `current.md` no está en `idle` con OTRO ticket, pregunta antes de seguir; nunca dos tickets en paralelo sobre el mismo `current.md`.
+5. **Triage propiamente dicho**: `mem_search`, `cat progress/current.md`, `git status`/`git log`. Clasifica el tamaño en TRES clases, no dos:
+   - **Trivial** (≤1 archivo, ≤5 líneas, sin lógica) → salta directo a Fase 5.
+   - **Grande** (cualquiera de: estimado >400 líneas o >5 archivos, toca un componente compartido por múltiples flujos, o cae en hot path — auth/update/security/payments) → el ciclo es SDD: tras el AUDIT (Fase 2) corre el skill `spec-bootstrap` (requirements/design/tasks con EARS) y corre `judgment-day` al cierre de design y de apply; las tasks del spec alimentan las fases 5–8 y sustituyen la Fase 4.
+   - **Medio** (todo lo demás) → pipeline estándar.
+   Si `current.md` no está en `idle` con OTRO ticket, pregunta antes de seguir; nunca dos tickets en paralelo sobre el mismo `current.md`.
 
 **Gate de Fase 0**: no entres al pipeline (Fase 1 en adelante) hasta que 1-3 queden resueltos, o el usuario haya confirmado explícitamente seguir sin ellos a sabiendas de que algún gate automático puede no disparar.
 
@@ -30,11 +34,11 @@ Cada fase escribe en `.claude/progress/` — ruta relativa a la raíz de ESTE re
 | 1 · Context (opc.) | tú: CLI del tracker (`acli` / `jira` / `gh issue view`) | Si solo hay texto pegado, salta a 2 con él. |
 | 2 · AUDIT | agente `ticket-audit` | `audit_<ID>.md`: root cause/approach, archivos, alternativas, preguntas, tasks. **Gate: el usuario lo aprueba.** |
 | 3 · EXPLORE (opc.) | 2-3 agentes `explorer` en un solo mensaje (paralelo real, ver orquestación) | Un `explore_<dim>.md` por dimensión (handler, schema, side-effects, caller, memoria). **Gate: validas que el approach del audit sigue vivo.** |
-| 4 · DESIGN (opc.) | agente `implementer` | Solo si hay patrón o librería nueva: presenta 2-3 approaches con tradeoffs y espera OK explícito. Si no aplica, salta a 5. |
+| 4 · DESIGN (opc.) | agente `implementer` | Solo si hay patrón o librería nueva: presenta 2-3 approaches con tradeoffs y espera OK explícito. En ticket Grande esta fase la sustituye el design SDD (`spec-bootstrap` + `judgment-day`, ver triage de Fase 0). Si no aplica, salta a 5. |
 | 5 · IMPLEMENT | UN agente `implementer` | Lee la ficha del repo (CLAUDE.md delgado) → `audit_<ID>.md` → `explore_*.md` → skill aplicable. Produce `impl_<feature>.md`. **Gate: el quality gate fast del repo — resuelto en runtime desde `qualityGate.fast` en `argos.config.json` o la ficha, nunca un comando asumido — verde en este turno.** |
-| 6 · VERIFY | skill `verify-before-done` (la corre el `implementer`) | `impl_<feature>.md` con "Verify ejecutado en este turno" en exit 0 + smoke del endpoint. Sin evidencia fresca → vuelve a 5. |
+| 6 · VERIFY | skill `verify-before-done` (la corre el `implementer`) + confirmación funcional | `impl_<feature>.md` con "Verify ejecutado en este turno" en exit 0 **y confirmación de que el cambio FUNCIONA en el flujo afectado**: backend → smoke del endpoint; UI → verificación conducida en navegador (dev server) o confirmación explícita del operador, registrada en `impl_<feature>.md`. "QA pendiente" NO es estado válido para avanzar: si el smoke solo puede hacerlo el operador, se le pide AQUÍ y el pipeline espera. Sin evidencia fresca → vuelve a 5. |
 | 7 · REVIEW | agente `reviewer` + skill `review-diff` (+ lentes 4R en paralelo si el diff es de riesgo — ver tabla de perfil en el bloque de orquestación) | `review_<feature>.md`. Two-stage; Stage 1 falla → `CHANGES_REQUESTED`, vuelve a 5 con un `implementer` FRESCO (agente nuevo, no el mismo con el transcript viejo). `APPROVED` → sigue. **Cap: 2 ciclos `CHANGES_REQUESTED` sobre el mismo ticket → escala al usuario en vez de reintentar en loop.** |
-| 8 · PR + CLOSE | agente `commit-pr-pilot` (aplica skill `pr-create`) | Pre-flight del pilot: working tree limpio, no estás en la rama base ni en la `prTarget` del repo (resueltas del `argos.config.json`/ficha), quality gate verde, `gh auth status` ok. PR creado y URL al usuario; luego `mem_save`, entrada en `history.md`, `current.md` a `idle` y `mem_session_summary`. |
+| 8 · PR + CLOSE | agente `commit-pr-pilot` (aplica skill `pr-create`) | Pre-flight del pilot: working tree limpio, no estás en la rama base ni en la `prTarget` del repo (resueltas del `argos.config.json`/ficha), quality gate verde, `gh auth status` ok, **y confirmación funcional registrada en `impl_<feature>.md` (Fase 6)**. PR creado y URL al usuario; luego `mem_save`, entrada en `history.md`, `current.md` a `idle` y `mem_session_summary`. |
 
 ## Reglas duras
 
@@ -42,6 +46,8 @@ Cada fase escribe en `.claude/progress/` — ruta relativa a la raíz de ESTE re
 - **El `implementer` arranca leyendo `audit_<ID>.md`** o pierdes contexto ya pagado con tokens.
 - **El `reviewer` no aprueba sin Stage 1;** la aprobación NO depende del `implementer`.
 - **No hay PR sin `APPROVED`** ni dos tickets en paralelo sobre el mismo `current.md`.
+- **No hay PR sin confirmación de que el cambio funciona en el flujo real** — automatizada (smoke de endpoint, verificación conducida en navegador) o explícita del operador, registrada en `impl_<feature>.md`. El gate estático (lint/tests/build) y el `APPROVED` del review NO la sustituyen; un PR con "QA pendiente" en el body es una violación de esta regla.
+- **Ticket Grande sin SDD es una violación del pipeline**: si el triage de Fase 0 lo clasificó Grande, el spec (`spec-bootstrap`) y los `judgment-day` de design/apply no son opcionales.
 - **Trivial** = ≤1 archivo, ≤5 líneas, sin lógica.
 - **Sin `argos.config.json` ni ficha**, no asumas un quality gate ni una `prTarget` fija — léelos del repo (o de `package.json`/scripts si ninguno existe) antes de declarar un gate verde, y sugiere `argos adopt` (Fase 0) antes de avanzar.
 
@@ -50,6 +56,7 @@ Cada fase escribe en `.claude/progress/` — ruta relativa a la raíz de ESTE re
 - La Fase 0 corrió: sesión anclada (o advertida), `argos.config.json`/ficha resueltos o el usuario confirmó seguir sin ellos.
 - El ciclo cerró con un PR vía `commit-pr-pilot` (skill `pr-create`) y su URL al usuario; `current.md` en `idle`.
 - Hubo `mem_save` de toda decisión no obvia y `mem_session_summary`.
-- Si fue no-trivial: existen `audit_<ID>.md` aprobado, `impl_<feature>.md` con verify en exit 0 y `review_<feature>.md` en `APPROVED`.
+- Si fue no-trivial: existen `audit_<ID>.md` aprobado, `impl_<feature>.md` con verify en exit 0 **y confirmación funcional registrada**, y `review_<feature>.md` en `APPROVED`.
+- Si fue Grande: existe además el spec SDD (requirements/design/tasks) y corrió `judgment-day` en design y en apply.
 
 Este skill vive una sola vez en el motor global (`~/.claude/skills/`) y aplica a cualquier repo con `argos.config.json`. Ningún comando de quality gate, rama base/destino o alias de identidad vive hardcodeado aquí: todo se resuelve en runtime leyendo la config o la ficha del repo donde se está trabajando.

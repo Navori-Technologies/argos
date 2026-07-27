@@ -18,9 +18,10 @@ Este skill no conoce de antemano ni la rama base ni la rama destino del PR: lée
 3. **`gh` autenticado**: `gh auth status`.
 4. **Gate verde en este turno**: el quality gate fast del repo, resuelto desde `qualityGate.fast` en `argos.config.json` o la ficha. Falla → manda al implementer.
 5. **Review APPROVED de esta feature** (harness activo): `.claude/progress/review_<feature>.md` puntual — glob `review_*.md` no vale. Ausente/ambiguo/scope distinto → NO aprobado, manda al reviewer. Si lista archivos, compáralos con `git diff --name-only`: archivos tocados que el review NO cubre → NO aprobado, aborta y devuelve al reviewer (no basta con mencionar la diferencia y seguir). Mantén este chequeo de cobertura en sync con el agente `commit-pr-pilot`.
-6. **Hay commits para el PR**: `git fetch origin <prTarget> --quiet` y `git log origin/<prTarget>..HEAD --oneline`. Vacío → nada que PR-ear.
-7. **Branch sincronizada**: `git log HEAD..origin/<prTarget> --oneline`. Si origin va adelante, rebase y pregunta.
-8. **Arrastre de commits** (solo si `branchBase` ≠ `prTarget`): `git rev-list --count origin/<prTarget>..origin/<branchBase>`. Si es > 0, `branchBase` va adelantado de `prTarget` y el PR arrastra esos commits ajenos: avisa y sugiere `git rebase origin/<prTarget>` antes de abrir.
+6. **Confirmación funcional del cambio** (harness activo): `.claude/progress/impl_<feature>.md` debe registrar que el cambio FUNCIONA en el flujo afectado — smoke del endpoint, verificación conducida en navegador, o confirmación explícita del operador. Si el impl declara "UI no validada", "QA pendiente" o simplemente no registra verificación funcional → ABORT: el PR no se abre; pide la confirmación al operador o devuelve a verify. El gate estático (lint/tests/build) NO sustituye este check.
+7. **Hay commits para el PR**: `git fetch origin <prTarget> --quiet` y `git log origin/<prTarget>..HEAD --oneline`. Vacío → nada que PR-ear.
+8. **Branch sincronizada**: `git log HEAD..origin/<prTarget> --oneline`. Si origin va adelante, rebase y pregunta.
+9. **Arrastre de commits** (solo si `branchBase` ≠ `prTarget`): `git rev-list --count origin/<prTarget>..origin/<branchBase>`. Si es > 0, `branchBase` va adelantado de `prTarget` y el PR arrastra esos commits ajenos: avisa y sugiere `git rebase origin/<prTarget>` antes de abrir.
 
 ## Push y redacción
 
@@ -53,6 +54,7 @@ Donde `$pr_target` es el valor de `prTarget` leído del `argos.config.json` del 
 - **NUNCA `git push --force`** ni `--no-verify` sin que lo pida el usuario.
 - **Siempre `--base` contra la `prTarget` resuelta del repo.** No la hardcodees ni la asumas de una sesión anterior; si el target del repo cambió, corrígelo en `argos.config.json` (por ejemplo con `argos adopt --refresh` si cambiaron los hechos del repo, o editándolo directo).
 - **Cambios uncommitted ajenos al feature** → párate y pregunta, no los arrastres al PR.
+- **Nunca un PR sin confirmación de que el cambio funciona** en el flujo real (check 6 del pre-flight). Un "Test plan" con casillas sin marcar no es evidencia — es deuda que el PR no debe cargar de origen.
 - **Reviewers/labels**: no los agregues automático salvo que el usuario lo pida.
 
 ## Antes de declarar listo
