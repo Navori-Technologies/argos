@@ -9,7 +9,11 @@ import { listBlocks, removeBlock } from "../lib/markers.js";
 import { hasArgosFileMarker, hasArgosShellFileMarker } from "../lib/managed-files.js";
 import { resolveArgosHome, resolveClaudeDir } from "../lib/paths.js";
 import { isInteractive, clackPrompter, type Prompter } from "../lib/prompter.js";
-import { removeAllArgosHooksFromSettings, removeOutputStyleIfArgos } from "../lib/settings-merge.js";
+import {
+  removeAllArgosHooksFromSettings,
+  removeDefaultModeIfAuto,
+  removeOutputStyleIfArgos,
+} from "../lib/settings-merge.js";
 
 /**
  * Uninstaller for `argos init`: the mirror image of `runInit` (see
@@ -416,6 +420,28 @@ export function runRemove(options: RemoveOptions = {}): RemoveReport {
   } else if (outputStyleResult.status === "removed") {
     rows.push({
       path: "settings.json#outputStyle",
+      category: "settings-entries",
+      status: apply ? "removed" : "would-remove",
+    });
+  }
+
+  // Auto mode (spec 0005 R10): remove settings.json.permissions.defaultMode
+  // ONLY when it's still exactly "auto" — the value argos init wrote. Any
+  // other value (an operator's own choice, or the key simply absent) is left
+  // byte-identical. Engram is deliberately NOT touched here at all (no-goal,
+  // see spec 0005): the accumulated memory is the operator's, never `argos
+  // remove`'s to uninstall or disable.
+  const defaultModeResult = removeDefaultModeIfAuto(settingsPath, { dryRun: !apply });
+  if (defaultModeResult.status === "error") {
+    rows.push({
+      path: "settings.json#defaultMode",
+      category: "settings-entries",
+      status: "error",
+      detail: defaultModeResult.detail,
+    });
+  } else if (defaultModeResult.status === "removed") {
+    rows.push({
+      path: "settings.json#defaultMode",
       category: "settings-entries",
       status: apply ? "removed" : "would-remove",
     });

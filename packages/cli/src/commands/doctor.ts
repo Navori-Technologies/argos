@@ -13,6 +13,7 @@ import {
 import { buildFichaContent, FICHA_BLOCK_ID } from "../lib/ficha.js";
 import { getRemoteOriginUrl, isGitRepo, parseIdentityFromRemote } from "../lib/git.js";
 import { listAgentIds, listSkillIds, MANAGED_BLOCK_IDS, resolveAssetsDir } from "../lib/assets.js";
+import { isEngramPluginEnabled } from "../lib/engram-plugin.js";
 import { listBlocks, listDanglingBlockIds } from "../lib/markers.js";
 import { hasArgosFileMarker, hasArgosShellFileMarker } from "../lib/managed-files.js";
 import { hasNaviorConfig } from "../lib/navori-import.js";
@@ -242,6 +243,51 @@ function checkOutputStyleVoice(findings: DoctorFinding[], claudeDir: string): vo
 }
 
 /**
+ * Engram (spec 0005 R8): warns when the `engram@engram` plugin isn't
+ * enabled in `settings.json.enabledPlugins`. Read-only — actually installing
+ * it is `argos init`'s job (see lib/engram-plugin.ts's `installEngramPlugin`);
+ * this only flags the drift, reusing that module's own read-only peek so the
+ * "enabled" definition never diverges between `init` and `doctor`.
+ */
+function checkEngramPlugin(findings: DoctorFinding[], claudeDir: string): void {
+  if (!isEngramPluginEnabled(join(claudeDir, "settings.json"))) {
+    findings.push({
+      level: "warning",
+      message: "El plugin engram@engram no está habilitado. Corre argos init.",
+    });
+  }
+}
+
+/**
+ * Auto mode (spec 0005 R8): warns when `permissions.defaultMode` is absent.
+ * Read-only, guarded against a missing/corrupt settings.json (never throws).
+ * Never opines on a `defaultMode` that IS present but not `"auto"` — that's
+ * the operator's own choice (see `applyDefaultModePolicy`'s R6 contract),
+ * not drift to report.
+ */
+function checkAutoMode(findings: DoctorFinding[], claudeDir: string): void {
+  const settingsPath = join(claudeDir, "settings.json");
+  if (!existsSync(settingsPath)) {
+    findings.push({ level: "warning", message: "permissions.defaultMode no está seteado. Corre argos init." });
+    return;
+  }
+
+  let settings: unknown;
+  try {
+    const raw = readFileSync(settingsPath, "utf-8");
+    settings = raw.trim().length === 0 ? {} : JSON.parse(raw);
+  } catch {
+    return; // settings.json's own JSON validity is already reported by checkHookSettings
+  }
+
+  const permissions = isPlainObject(settings) ? settings.permissions : undefined;
+  const defaultMode = isPlainObject(permissions) ? permissions.defaultMode : undefined;
+  if (defaultMode === undefined) {
+    findings.push({ level: "warning", message: "permissions.defaultMode no está seteado. Corre argos init." });
+  }
+}
+
+/**
  * Workspaces (F2, motor scope): `~/.argos/workspaces.json` registry entries
  * whose repo path no longer exists on disk (moved/deleted repo). Guarded
  * against a corrupt registry file — never throws.
@@ -353,6 +399,8 @@ function checkMotor(findings: DoctorFinding[]): void {
   checkHookScripts(findings, claudeDir, currentVersion);
   checkHookSettings(findings, claudeDir);
   checkOutputStyleVoice(findings, claudeDir);
+  checkEngramPlugin(findings, claudeDir);
+  checkAutoMode(findings, claudeDir);
   checkWorkspaceRegistryHealth(findings);
 }
 

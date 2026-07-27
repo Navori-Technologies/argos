@@ -3,12 +3,14 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  applyDefaultModePolicy,
   applyOutputStylePolicy,
   type ArgosHookSpec,
   isArgosHookCommand,
   isNavoriOutputStyle,
   mergeHooksIntoSettings,
   removeAllArgosHooksFromSettings,
+  removeDefaultModeIfAuto,
   removeOutputStyleIfArgos,
 } from "./settings-merge.js";
 
@@ -466,6 +468,206 @@ describe("removeOutputStyleIfArgos", () => {
     const result = removeOutputStyleIfArgos(settingsPath, { dryRun: true });
 
     expect(result.status).toBe("removed");
+    expect(readFileSync(settingsPath, "utf-8")).toBe(before);
+  });
+});
+
+describe("applyDefaultModePolicy", () => {
+  let dir: string;
+  let settingsPath: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "argos-settings-defaultmode-"));
+    settingsPath = join(dir, "settings.json");
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  // Covers: R5, R6
+  it("creates settings.json from scratch with permissions.defaultMode = auto when absent", () => {
+    const result = applyDefaultModePolicy(settingsPath);
+
+    expect(result.status).toBe("created");
+    const written = JSON.parse(readFileSync(settingsPath, "utf-8")) as { permissions: { defaultMode: string } };
+    expect(written.permissions.defaultMode).toBe("auto");
+  });
+
+  // Covers: R5
+  it("updates in place when permissions exists but defaultMode is absent", () => {
+    writeFileSync(settingsPath, JSON.stringify({ permissions: { allow: ["Read(**)"] } }, null, 2), "utf-8");
+
+    const result = applyDefaultModePolicy(settingsPath);
+
+    expect(result.status).toBe("updated");
+    const written = JSON.parse(readFileSync(settingsPath, "utf-8")) as {
+      permissions: { allow: string[]; defaultMode: string };
+    };
+    expect(written.permissions.defaultMode).toBe("auto");
+    // Foreign permissions.* keys untouched.
+    expect(written.permissions.allow).toEqual(["Read(**)"]);
+  });
+
+  // Covers: R6
+  it("is unchanged, no write, when defaultMode is already 'auto'", () => {
+    writeFileSync(settingsPath, JSON.stringify({ permissions: { defaultMode: "auto" } }, null, 2), "utf-8");
+    const before = readFileSync(settingsPath, "utf-8");
+
+    const result = applyDefaultModePolicy(settingsPath);
+
+    expect(result.status).toBe("unchanged");
+    expect(readFileSync(settingsPath, "utf-8")).toBe(before);
+  });
+
+  // Covers: R6
+  it("never touches a foreign defaultMode value, reporting skipped-foreign with the current value", () => {
+    writeFileSync(settingsPath, JSON.stringify({ permissions: { defaultMode: "bypassPermissions" } }, null, 2), "utf-8");
+    const before = readFileSync(settingsPath, "utf-8");
+
+    const result = applyDefaultModePolicy(settingsPath);
+
+    expect(result.status).toBe("skipped-foreign");
+    expect(result.detail).toContain("bypassPermissions");
+    expect(readFileSync(settingsPath, "utf-8")).toBe(before);
+  });
+
+  // Covers: R5, R6
+  it("refuses to write and reports an error when settings.json has invalid JSON", () => {
+    writeFileSync(settingsPath, "{ not valid json", "utf-8");
+    const before = readFileSync(settingsPath, "utf-8");
+
+    const result = applyDefaultModePolicy(settingsPath);
+
+    expect(result.status).toBe("error");
+    expect(readFileSync(settingsPath, "utf-8")).toBe(before);
+  });
+
+  // Covers: R5, R6
+  it("refuses with a clear message when settings.json changed concurrently between read and write (mtime guard)", () => {
+    writeFileSync(settingsPath, JSON.stringify({ outputStyle: "Argos" }, null, 2), "utf-8"); // file must pre-exist for the mtime guard to engage
+    const result = applyDefaultModePolicy(settingsPath, {
+      onBeforeWrite: () => {
+        writeFileSync(settingsPath, JSON.stringify({ permissions: { allow: ["Read(**)"] } }, null, 2), "utf-8");
+      },
+    });
+
+    expect(result.status).toBe("error");
+    expect(result.detail).toMatch(/cambió durante el merge/);
+    expect(JSON.parse(readFileSync(settingsPath, "utf-8"))).toEqual({ permissions: { allow: ["Read(**)"] } });
+  });
+
+  // Covers: R5
+  it("errors when permissions is not a plain object (e.g. an array), file left untouched", () => {
+    writeFileSync(settingsPath, JSON.stringify({ permissions: ["not", "an", "object"] }, null, 2), "utf-8");
+    const before = readFileSync(settingsPath, "utf-8");
+
+    const result = applyDefaultModePolicy(settingsPath);
+
+    expect(result.status).toBe("error");
+    expect(readFileSync(settingsPath, "utf-8")).toBe(before);
+  });
+});
+
+describe("removeDefaultModeIfAuto", () => {
+  let dir: string;
+  let settingsPath: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "argos-settings-remove-defaultmode-"));
+    settingsPath = join(dir, "settings.json");
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  // Covers: R10
+  it("removes defaultMode (and the now-empty permissions object) only when it's exactly 'auto'", () => {
+    writeFileSync(settingsPath, JSON.stringify({ permissions: { defaultMode: "auto" } }, null, 2), "utf-8");
+
+    const result = removeDefaultModeIfAuto(settingsPath);
+
+    expect(result.status).toBe("removed");
+    const written = JSON.parse(readFileSync(settingsPath, "utf-8")) as Record<string, unknown>;
+    expect(written.permissions).toBeUndefined();
+  });
+
+  // Covers: R10
+  it("keeps the permissions object when other keys remain after removing defaultMode", () => {
+    writeFileSync(
+      settingsPath,
+      JSON.stringify({ permissions: { defaultMode: "auto", allow: ["Read(**)"] } }, null, 2),
+      "utf-8",
+    );
+
+    const result = removeDefaultModeIfAuto(settingsPath);
+
+    expect(result.status).toBe("removed");
+    const written = JSON.parse(readFileSync(settingsPath, "utf-8")) as { permissions: { allow: string[] } };
+    expect(written.permissions).toEqual({ allow: ["Read(**)"] });
+  });
+
+  // Covers: R10
+  it("leaves a foreign (non-'auto') defaultMode value untouched", () => {
+    writeFileSync(settingsPath, JSON.stringify({ permissions: { defaultMode: "plan" } }, null, 2), "utf-8");
+    const before = readFileSync(settingsPath, "utf-8");
+
+    const result = removeDefaultModeIfAuto(settingsPath);
+
+    expect(result.status).toBe("unchanged");
+    expect(readFileSync(settingsPath, "utf-8")).toBe(before);
+  });
+
+  // Covers: R10
+  it("leaves settings.json.enabledPlugins fully untouched (Engram is never removed by argos remove)", () => {
+    writeFileSync(
+      settingsPath,
+      JSON.stringify({ permissions: { defaultMode: "auto" }, enabledPlugins: { "engram@engram": true } }, null, 2),
+      "utf-8",
+    );
+
+    removeDefaultModeIfAuto(settingsPath);
+
+    const written = JSON.parse(readFileSync(settingsPath, "utf-8")) as { enabledPlugins: Record<string, boolean> };
+    expect(written.enabledPlugins).toEqual({ "engram@engram": true });
+  });
+
+  // Covers: R10
+  it("is unchanged when the key is absent, or the file is missing", () => {
+    expect(removeDefaultModeIfAuto(settingsPath).status).toBe("unchanged");
+
+    writeFileSync(settingsPath, JSON.stringify({ permissions: {} }, null, 2), "utf-8");
+    expect(removeDefaultModeIfAuto(settingsPath).status).toBe("unchanged");
+  });
+
+  // Covers: R10
+  it("dryRun reports removed without writing anything", () => {
+    writeFileSync(settingsPath, JSON.stringify({ permissions: { defaultMode: "auto" } }, null, 2), "utf-8");
+    const before = readFileSync(settingsPath, "utf-8");
+
+    const result = removeDefaultModeIfAuto(settingsPath, { dryRun: true });
+
+    expect(result.status).toBe("removed");
+    expect(readFileSync(settingsPath, "utf-8")).toBe(before);
+  });
+
+  // Covers: R10
+  // Deliberate asymmetry with applyDefaultModePolicy (see the test above named
+  // "errors when permissions is not a plain object"): apply is a write path,
+  // so a malformed `permissions` fails loud (`status: "error"`) rather than
+  // silently skipping the write the operator asked for. remove is a cleanup
+  // path — its job is "undo my own auto-mode write if it's still there" — so
+  // a foreign/malformed `permissions` just means there's nothing of ours to
+  // undo; it reports "unchanged" and leaves the file byte-identical rather
+  // than erroring on a shape it didn't create and isn't asked to fix.
+  it("is unchanged (not error) when permissions is not a plain object (e.g. a string), file left untouched", () => {
+    writeFileSync(settingsPath, JSON.stringify({ permissions: "not-an-object" }, null, 2), "utf-8");
+    const before = readFileSync(settingsPath, "utf-8");
+
+    const result = removeDefaultModeIfAuto(settingsPath);
+
+    expect(result.status).toBe("unchanged");
     expect(readFileSync(settingsPath, "utf-8")).toBe(before);
   });
 });

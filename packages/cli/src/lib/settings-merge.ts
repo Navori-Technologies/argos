@@ -439,6 +439,110 @@ export function applyOutputStylePolicy(
   return { status: "created" };
 }
 
+// --- permissions.defaultMode ("auto mode por defecto") — spec 0005 ---
+
+export type DefaultModeStatus = "created" | "updated" | "unchanged" | "skipped-foreign" | "error";
+
+export interface ApplyDefaultModeResult {
+  status: DefaultModeStatus;
+  detail?: string;
+}
+
+export interface ApplyDefaultModeOptions {
+  /** Same test-only race seam as `MergeHooksOptions.onBeforeWrite` above. */
+  onBeforeWrite?: () => void;
+}
+
+/**
+ * Surgical policy for `settings.json.permissions.defaultMode` (spec 0005
+ * "auto mode por defecto") — same mtime-guarded read-modify-write mechanics
+ * as `applyOutputStylePolicy`, just one level deeper (nested under
+ * `permissions` instead of top-level).
+ *
+ * - `permissions` absent → created with `{ defaultMode: "auto" }`, `status: "created"`.
+ * - `permissions` present but `defaultMode` absent → set to `"auto"`, `status: "updated"`.
+ * - `permissions.defaultMode` already `"auto"` → `status: "unchanged"`, no write.
+ * - `permissions.defaultMode` set to any other value → NEVER touched,
+ *   `status: "skipped-foreign"` with the current value in `detail` (R6).
+ *
+ * Every other top-level key — including every other `permissions.*` key — is
+ * left exactly as found, same surgical contract as the rest of this module.
+ */
+export function applyDefaultModePolicy(
+  settingsPath: string,
+  options: ApplyDefaultModeOptions = {},
+): ApplyDefaultModeResult {
+  const existed = existsSync(settingsPath);
+  let raw = "{}";
+  let mtimeAtRead: number | undefined;
+  if (existed) {
+    try {
+      raw = readFileSync(settingsPath, "utf-8");
+      mtimeAtRead = statSync(settingsPath).mtimeMs;
+    } catch (err) {
+      return { status: "error", detail: errorMessage(err) };
+    }
+  }
+
+  let settings: Record<string, unknown>;
+  try {
+    const parsed: unknown = raw.trim().length === 0 ? {} : JSON.parse(raw);
+    if (!isPlainObject(parsed)) {
+      return { status: "error", detail: "settings.json existente no es un objeto JSON — arreglalo a mano." };
+    }
+    settings = parsed;
+  } catch (err) {
+    return {
+      status: "error",
+      detail: `settings.json existente tiene JSON inválido (${errorMessage(err)}) — arréglalo a mano y vuelve a correr argos init.`,
+    };
+  }
+
+  if (settings.permissions !== undefined && !isPlainObject(settings.permissions)) {
+    return { status: "error", detail: "settings.json tiene permissions que no es un objeto — arreglalo a mano." };
+  }
+  const permissionsExisted = isPlainObject(settings.permissions);
+  const permissions: Record<string, unknown> = permissionsExisted
+    ? (settings.permissions as Record<string, unknown>)
+    : {};
+
+  const current = permissions.defaultMode;
+  if (current === "auto") {
+    return { status: "unchanged" };
+  }
+  if (current !== undefined) {
+    return {
+      status: "skipped-foreign",
+      detail: `permissions.defaultMode ya está en '${String(current)}' — no se toca`,
+    };
+  }
+
+  permissions.defaultMode = "auto";
+  settings.permissions = permissions;
+
+  options.onBeforeWrite?.();
+
+  if (existed && mtimeAtRead !== undefined) {
+    let mtimeNow: number | undefined;
+    try {
+      mtimeNow = statSync(settingsPath).mtimeMs;
+    } catch {
+      mtimeNow = undefined;
+    }
+    if (mtimeNow !== undefined && mtimeNow !== mtimeAtRead) {
+      return { status: "error", detail: "settings.json cambió durante el merge — reintenta." };
+    }
+  }
+
+  try {
+    writeFileAtomic(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+  } catch (err) {
+    return { status: "error", detail: errorMessage(err) };
+  }
+
+  return { status: permissionsExisted ? "updated" : "created" };
+}
+
 export type RemoveOutputStyleStatus = "removed" | "unchanged" | "error";
 
 export interface RemoveOutputStyleResult {
@@ -495,6 +599,97 @@ export function removeOutputStyleIfArgos(
   if (options.dryRun) return { status: "removed" };
 
   delete settings.outputStyle;
+
+  options.onBeforeWrite?.();
+
+  let mtimeNow: number | undefined;
+  try {
+    mtimeNow = statSync(settingsPath).mtimeMs;
+  } catch {
+    mtimeNow = undefined;
+  }
+  if (mtimeNow !== undefined && mtimeNow !== mtimeAtRead) {
+    return { status: "error", detail: "settings.json cambió durante el remove — reintenta." };
+  }
+
+  try {
+    writeFileAtomic(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+  } catch (err) {
+    return { status: "error", detail: errorMessage(err) };
+  }
+
+  return { status: "removed" };
+}
+
+export type RemoveDefaultModeStatus = "removed" | "unchanged" | "error";
+
+export interface RemoveDefaultModeResult {
+  status: RemoveDefaultModeStatus;
+  detail?: string;
+}
+
+export interface RemoveDefaultModeOptions {
+  /** Same `argos remove` preview-mode seam as `RemoveOutputStyleOptions.dryRun` above. */
+  dryRun?: boolean;
+  /** Same test-only race seam as `MergeHooksOptions.onBeforeWrite` above. */
+  onBeforeWrite?: () => void;
+}
+
+/**
+ * `argos remove`'s mirror of `applyDefaultModePolicy` (spec 0005 R10):
+ * removes `settings.json.permissions.defaultMode` ONLY when it's exactly
+ * `"auto"` — the value `argos init` itself would have written. Any other
+ * value (including one `argos init` never touched, or the key simply absent)
+ * is left exactly as found — this command only ever cleans up after itself,
+ * never after the operator's own choice of permission mode. When removing it
+ * empties `permissions` down to nothing, the now-empty `permissions` object
+ * is dropped too — it only ever existed to hold this one key on a fresh
+ * install (mirrors `processClaudeMd`'s own "delete the file if it becomes
+ * empty" policy in commands/remove.ts). Note this module deliberately has NO
+ * Engram-plugin counterpart: `argos remove` never uninstalls/disables Engram
+ * (spec 0005's no-goals) — the accumulated memory is the operator's, not
+ * Argos's to delete.
+ */
+export function removeDefaultModeIfAuto(
+  settingsPath: string,
+  options: RemoveDefaultModeOptions = {},
+): RemoveDefaultModeResult {
+  if (!existsSync(settingsPath)) return { status: "unchanged" };
+
+  let raw: string;
+  let mtimeAtRead: number;
+  try {
+    raw = readFileSync(settingsPath, "utf-8");
+    mtimeAtRead = statSync(settingsPath).mtimeMs;
+  } catch (err) {
+    return { status: "error", detail: errorMessage(err) };
+  }
+
+  let settings: Record<string, unknown>;
+  try {
+    const parsed: unknown = raw.trim().length === 0 ? {} : JSON.parse(raw);
+    if (!isPlainObject(parsed)) {
+      return { status: "error", detail: "settings.json existente no es un objeto JSON — arreglalo a mano." };
+    }
+    settings = parsed;
+  } catch (err) {
+    return {
+      status: "error",
+      detail: `settings.json existente tiene JSON inválido (${errorMessage(err)}) — arreglalo a mano.`,
+    };
+  }
+
+  if (!isPlainObject(settings.permissions)) return { status: "unchanged" };
+  const permissions = settings.permissions as Record<string, unknown>;
+  if (permissions.defaultMode !== "auto") return { status: "unchanged" };
+  if (options.dryRun) return { status: "removed" };
+
+  delete permissions.defaultMode;
+  if (Object.keys(permissions).length === 0) {
+    delete settings.permissions;
+  } else {
+    settings.permissions = permissions;
+  }
 
   options.onBeforeWrite?.();
 

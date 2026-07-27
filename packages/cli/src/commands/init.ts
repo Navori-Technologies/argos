@@ -12,6 +12,7 @@ import {
 } from "../lib/assets.js";
 import { writeFileAtomic } from "../lib/atomic-write.js";
 import { createBackup } from "../lib/backup.js";
+import { installEngramPlugin, type ClaudeCliRunner } from "../lib/engram-plugin.js";
 import { injectBlock, listBlocks } from "../lib/markers.js";
 import {
   type FileStatus,
@@ -23,6 +24,7 @@ import {
 import { resolveArgosHome, resolveClaudeDir } from "../lib/paths.js";
 import {
   type ArgosHookSpec,
+  applyDefaultModePolicy,
   applyOutputStylePolicy,
   isNavoriOutputStyle,
   mergeHooksIntoSettings,
@@ -66,6 +68,28 @@ export interface InitOptions {
   installAgents?: boolean;
   /** Install the 2 global hooks (scripts + settings.json entries). Default `true`. */
   installHooks?: boolean;
+  /**
+   * Install the Engram persistent-memory plugin (`engram@engram`) via the
+   * `claude` CLI when it isn't already enabled (spec 0005 R1/R2/R3). Default
+   * `true`; the wizard's "instalar Engram sí/no" step (default sí, R4) passes
+   * `false` when the operator declines — the whole step is then skipped
+   * entirely (no row, no process spawned).
+   */
+  installEngram?: boolean;
+  /**
+   * Injectable for tests; defaults to `runClaudeCli` (see
+   * lib/engram-plugin.ts). Never used outside tests — the real `argos init`
+   * CLI always goes through the real `claude`-CLI-backed runner.
+   */
+  engramRunner?: ClaudeCliRunner;
+  /**
+   * Set `settings.json.permissions.defaultMode` to `"auto"` when the key is
+   * absent (spec 0005 R5/R6). Default `true`; the wizard's "activar auto mode
+   * sí/no" step (default sí, R7) passes `false` when the operator declines —
+   * the key is then never touched and no row is emitted. Never overwrites an
+   * already-set `defaultMode`, whatever its value (R6).
+   */
+  setAutoMode?: boolean;
   /**
    * Whether to take over `settings.json.outputStyle` when it currently
    * points at the predecessor harness's voice (`navori`). Default `true`
@@ -182,6 +206,8 @@ export function runInit(options: InitOptions = {}): InitReport {
   const language = options.language ?? "es";
   const installAgents = options.installAgents ?? true;
   const installHooks = options.installHooks ?? true;
+  const installEngram = options.installEngram ?? true;
+  const setAutoMode = options.setAutoMode ?? true;
   const force = options.force ?? false;
   const version = readCliVersion();
   const claudeDir = resolveClaudeDir();
@@ -337,7 +363,19 @@ export function runInit(options: InitOptions = {}): InitReport {
     rows.push({ path: "settings.json", status: mergeResult.status, detail: mergeResult.detail });
   }
 
-  // 2d. Voice activation (spec 0004 "Activación de la voz"):
+  // 2d. Engram plugin (spec 0005 "Engram como parte del motor"): install
+  // `engram@engram` via the `claude` CLI unless it's already enabled.
+  // Delegates entirely to `installEngramPlugin` (lib/engram-plugin.ts), which
+  // peeks `enabledPlugins` itself and never writes settings.json directly —
+  // a successful install is the `claude` CLI's own write, not ours. Gated by
+  // the `installEngram` toggle (default true; the wizard's "Engram sí/no"
+  // step — R4): when declined, this is skipped entirely, no row at all.
+  if (installEngram) {
+    const result = installEngramPlugin(join(claudeDir, "settings.json"), { runner: options.engramRunner });
+    rows.push({ path: "plugins#engram", status: result.status, detail: result.detail });
+  }
+
+  // 2e. Voice activation (spec 0004 "Activación de la voz"):
   // settings.json.outputStyle. Absent → set to "Argos". Matching the
   // predecessor harness's voice (navori) → takeover per
   // `takeoverNavoriVoice` (default true, i.e. unconditional replace under
@@ -354,6 +392,16 @@ export function runInit(options: InitOptions = {}): InitReport {
   const outputStyleRowStatus: InitRowStatus =
     outputStyleResult.status === "untouched" ? "skipped-foreign" : outputStyleResult.status;
   rows.push({ path: "settings.json#outputStyle", status: outputStyleRowStatus, detail: outputStyleResult.detail });
+
+  // 2f. Auto mode (spec 0005 "auto mode por defecto"):
+  // settings.json.permissions.defaultMode. Absent → set to "auto". Already
+  // "auto" → unchanged. Any other value → never touched (R6). Gated by the
+  // `setAutoMode` toggle (default true; the wizard's "auto mode sí/no" step
+  // — R7): when declined, this is skipped entirely, no row at all.
+  if (setAutoMode) {
+    const defaultModeResult = applyDefaultModePolicy(join(claudeDir, "settings.json"));
+    rows.push({ path: "settings.json#defaultMode", status: defaultModeResult.status, detail: defaultModeResult.detail });
+  }
 
   // 3. ~/.argos/global.json
   const argosHome = resolveArgosHome();
@@ -464,13 +512,14 @@ function countForceOverwrites(
 }
 
 /**
- * Interactive layer over `runInit` (spec 0004 F5 "argos init"). A pure
- * additive wrapper — the core `runInit` never changes behavior or contract.
- * Without a real TTY, or with `--yes`, this delegates to `runInit(options)`
- * unchanged: no prompt library call is ever reached on that path. With a
- * TTY, it runs a 3-step wizard (language, agents/hooks toggles, summary +
- * final confirm) before calling `runInit` with the gathered choices;
- * cancelling at any step touches nothing and returns a no-op report.
+ * Interactive layer over `runInit` (spec 0004 F5 "argos init"; Engram/auto
+ * mode confirms added by spec 0005). A pure additive wrapper — the core
+ * `runInit` never changes behavior or contract. Without a real TTY, or with
+ * `--yes`, this delegates to `runInit(options)` unchanged: no prompt library
+ * call is ever reached on that path. With a TTY, it runs a wizard (language,
+ * agents/hooks/Engram/auto-mode toggles, summary + final confirm) before
+ * calling `runInit` with the gathered choices; cancelling at any step
+ * touches nothing and returns a no-op report.
  */
 export async function runInitInteractive(options: InitInteractiveOptions = {}): Promise<InitReport> {
   if (!isInteractive({ yes: options.yes })) {
@@ -508,6 +557,30 @@ export async function runInitInteractive(options: InitInteractiveOptions = {}): 
     initialValue: options.installHooks ?? true,
   });
   if (prompter.isCancel(installHooks)) {
+    prompter.cancel("argos init cancelado — no se tocó nada.");
+    return cancelledInitReport();
+  }
+
+  // Engram (spec 0005 R4): declining skips the whole step in `runInit`
+  // (no row, no process spawned) — see `InitOptions.installEngram`.
+  const installEngram = await prompter.confirm({
+    message:
+      "¿Instalar Engram, un plugin de terceros (Gentleman-Programming/engram, vía GitHub) que provee memoria persistente por MCP?",
+    initialValue: options.installEngram ?? true,
+  });
+  if (prompter.isCancel(installEngram)) {
+    prompter.cancel("argos init cancelado — no se tocó nada.");
+    return cancelledInitReport();
+  }
+
+  // Auto mode (spec 0005 R7): declining skips the whole step in `runInit`
+  // (key never touched, no row) — see `InitOptions.setAutoMode`.
+  const setAutoMode = await prompter.confirm({
+    message:
+      '¿Setear permissions.defaultMode = "auto" en el settings.json global (~/.claude), reduciendo prompts de permiso en todas las sesiones de Claude Code de esta máquina?',
+    initialValue: options.setAutoMode ?? true,
+  });
+  if (prompter.isCancel(setAutoMode)) {
     prompter.cancel("argos init cancelado — no se tocó nada.");
     return cancelledInitReport();
   }
@@ -559,6 +632,8 @@ export async function runInitInteractive(options: InitInteractiveOptions = {}): 
       `agentes: ${installAgents ? "sí" : "no"}`,
       "hooks: " + (installHooks ? "sí" : "no"),
       "skills: sí (siempre — cargan on-demand)",
+      `engram: ${installEngram ? "sí" : "no"}`,
+      `auto mode: ${setAutoMode ? "sí" : "no"}`,
       `destino: ${claudeDir}`,
       "se hace un backup antes de escribir nada",
     ].join("\n"),
@@ -575,8 +650,11 @@ export async function runInitInteractive(options: InitInteractiveOptions = {}): 
     language,
     installAgents,
     installHooks,
+    installEngram,
+    setAutoMode,
     takeoverNavoriVoice,
     force,
+    engramRunner: options.engramRunner,
   });
   prompter.outro(report.summary);
   return report;

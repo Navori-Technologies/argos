@@ -12,6 +12,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { ClaudeCliRunner } from "../lib/engram-plugin.js";
 import type { Prompter } from "../lib/prompter.js";
 import { runInit, runInitInteractive } from "./init.js";
 
@@ -79,7 +80,7 @@ describe("runInit", () => {
   });
 
   it("fresh run creates every managed block and every full-file asset", () => {
-    const report = runInit();
+    const report = runInit({ installEngram: false, setAutoMode: false });
 
     expect(report.exitCode).toBe(0);
     expect(report.rows.every((r) => r.status === "created")).toBe(true);
@@ -111,7 +112,7 @@ describe("runInit", () => {
   });
 
   it("installs the disciplina-skills block ordered after formato-respuesta and before aterrizaje", () => {
-    runInit();
+    runInit({ installEngram: false, setAutoMode: false });
 
     const claudeMd = readFileSync(join(claudeDir, "CLAUDE.md"), "utf-8");
     expect(claudeMd).toContain('id="disciplina-skills"');
@@ -129,14 +130,14 @@ describe("runInit", () => {
   });
 
   it("respects the --language flag in global.json", () => {
-    runInit({ language: "en" });
+    runInit({ language: "en", installEngram: false, setAutoMode: false });
     const globalJson = JSON.parse(readFileSync(join(argosHome, "global.json"), "utf-8")) as { language: string };
     expect(globalJson.language).toBe("en");
   });
 
   it("is idempotent — a second run with no changes reports everything unchanged", () => {
-    runInit();
-    const second = runInit();
+    runInit({ installEngram: false, setAutoMode: false });
+    const second = runInit({ installEngram: false, setAutoMode: false });
 
     expect(second.exitCode).toBe(0);
     expect(second.rows.every((r) => r.status === "unchanged")).toBe(true);
@@ -148,7 +149,7 @@ describe("runInit", () => {
     const foreignContent = "---\nname: verify-before-done\n---\n\nMy own hand-written skill.\n";
     writeFileSync(foreignPath, foreignContent, "utf-8");
 
-    const report = runInit();
+    const report = runInit({ installEngram: false, setAutoMode: false });
 
     const row = report.rows.find((r) => r.path === join("skills", "verify-before-done", "SKILL.md"));
     expect(row?.status).toBe("skipped-foreign");
@@ -160,7 +161,7 @@ describe("runInit", () => {
     const foreignContent = "# My global notes\n\nHand-written, do not touch.\n";
     writeFileSync(join(claudeDir, "CLAUDE.md"), foreignContent, "utf-8");
 
-    runInit();
+    runInit({ installEngram: false, setAutoMode: false });
 
     const claudeMd = readFileSync(join(claudeDir, "CLAUDE.md"), "utf-8");
     expect(claudeMd.startsWith(foreignContent)).toBe(true);
@@ -172,7 +173,7 @@ describe("runInit", () => {
     () => {
       chmodSync(claudeDir, 0o500);
       try {
-        const report = runInit();
+        const report = runInit({ installEngram: false, setAutoMode: false });
 
         expect(report.exitCode).toBe(1);
         const errorRows = report.rows.filter((r) => r.status === "error");
@@ -182,7 +183,7 @@ describe("runInit", () => {
         expect(report.rows.some((r) => r.path === "global.json" && r.status === "created")).toBe(true);
         // The backup itself only reads from claudeDir and writes elsewhere, so it still succeeds.
         expect(report.backupPath).toBeTruthy();
-        expect(() => runInit()).not.toThrow();
+        expect(() => runInit({ installEngram: false, setAutoMode: false })).not.toThrow();
       } finally {
         chmodSync(claudeDir, 0o700);
       }
@@ -201,7 +202,7 @@ describe("runInit", () => {
       // read-only so `mkdirSync` for the backup dir throws.
       chmodSync(argosHome, 0o500);
       try {
-        const report = runInit();
+        const report = runInit({ installEngram: false, setAutoMode: false });
 
         expect(report.exitCode).toBe(1);
         expect(report.summary).toMatch(/backup falló/);
@@ -222,7 +223,7 @@ describe("runInit", () => {
 
   describe("hooks + settings.json (spec 0003)", () => {
     it("installs both hook scripts, executable, with the real version stamped", () => {
-      const report = runInit();
+      const report = runInit({ installEngram: false, setAutoMode: false });
       expect(report.exitCode).toBe(0);
 
       const guardPath = join(claudeDir, "hooks", "argos-guard-destructive.sh");
@@ -246,7 +247,7 @@ describe("runInit", () => {
     });
 
     it("adds both PreToolUse hook entries to a fresh settings.json", () => {
-      const report = runInit();
+      const report = runInit({ installEngram: false, setAutoMode: false });
 
       const settingsPath = join(claudeDir, "settings.json");
       expect(existsSync(settingsPath)).toBe(true);
@@ -268,7 +269,7 @@ describe("runInit", () => {
       };
       writeFileSync(join(claudeDir, "settings.json"), JSON.stringify(foreign, null, 2), "utf-8");
 
-      const report = runInit();
+      const report = runInit({ installEngram: false, setAutoMode: false });
       expect(report.exitCode).toBe(0);
 
       const settings = JSON.parse(readFileSync(join(claudeDir, "settings.json"), "utf-8")) as {
@@ -284,8 +285,8 @@ describe("runInit", () => {
     });
 
     it("is idempotent — a second run reports both hooks and settings.json unchanged", () => {
-      runInit();
-      const second = runInit();
+      runInit({ installEngram: false, setAutoMode: false });
+      const second = runInit({ installEngram: false, setAutoMode: false });
 
       const hookRows = second.rows.filter((r) => r.path.startsWith(join("hooks", "")));
       expect(hookRows.every((r) => r.status === "unchanged")).toBe(true);
@@ -298,7 +299,7 @@ describe("runInit", () => {
       const foreignContent = "#!/usr/bin/env bash\necho hand-written hook\n";
       writeFileSync(guardPath, foreignContent, "utf-8");
 
-      const report = runInit();
+      const report = runInit({ installEngram: false, setAutoMode: false });
 
       const row = report.rows.find((r) => r.path === join("hooks", "argos-guard-destructive.sh"));
       expect(row?.status).toBe("skipped-foreign");
@@ -307,7 +308,7 @@ describe("runInit", () => {
 
     it("strips a hook's PREVIOUSLY-successful settings.json entry when its write breaks on a later run", () => {
       // Run 1: fresh install, both hooks succeed and get real entries.
-      const first = runInit();
+      const first = runInit({ installEngram: false, setAutoMode: false });
       expect(first.exitCode).toBe(0);
 
       // Now the gate script breaks (e.g. something replaced it with a dir).
@@ -315,7 +316,7 @@ describe("runInit", () => {
       rmSync(gatePath, { recursive: true, force: true });
       mkdirSync(gatePath, { recursive: true });
 
-      const second = runInit();
+      const second = runInit({ installEngram: false, setAutoMode: false });
       expect(second.exitCode).toBe(1);
       const gateRow = second.rows.find((r) => r.path === join("hooks", "argos-quality-gate.sh"));
       expect(gateRow?.status).toBe("error");
@@ -336,7 +337,7 @@ describe("runInit", () => {
       const gatePath = join(claudeDir, "hooks", "argos-quality-gate.sh");
       mkdirSync(gatePath, { recursive: true });
 
-      const report = runInit();
+      const report = runInit({ installEngram: false, setAutoMode: false });
 
       const gateRow = report.rows.find((r) => r.path === join("hooks", "argos-quality-gate.sh"));
       expect(gateRow?.status).toBe("error");
@@ -358,7 +359,7 @@ describe("runInit", () => {
       const corrupt = "{ not valid json";
       writeFileSync(join(claudeDir, "settings.json"), corrupt, "utf-8");
 
-      const report = runInit();
+      const report = runInit({ installEngram: false, setAutoMode: false });
 
       expect(report.exitCode).toBe(1);
       const row = report.rows.find((r) => r.path === "settings.json");
@@ -368,14 +369,14 @@ describe("runInit", () => {
     });
 
     it("installHooks: false on a SECOND run does not retroactively strip hooks a prior run already installed", () => {
-      runInit(); // default run installs both hooks + their settings.json entries
+      runInit({ installEngram: false, setAutoMode: false }); // default run installs both hooks + their settings.json entries
       const guardScriptPath = join(claudeDir, "hooks", "argos-guard-destructive.sh");
       const gateScriptPath = join(claudeDir, "hooks", "argos-quality-gate.sh");
       expect(existsSync(guardScriptPath)).toBe(true);
       expect(existsSync(gateScriptPath)).toBe(true);
       const settingsBefore = readFileSync(join(claudeDir, "settings.json"), "utf-8");
 
-      const report = runInit({ installHooks: false });
+      const report = runInit({ installHooks: false, installEngram: false, setAutoMode: false });
 
       // Untouched — a later run toggling hooks off is not a retroactive
       // uninstall; that's `argos remove`'s job (see commands/init.ts's
@@ -390,7 +391,7 @@ describe("runInit", () => {
 
   describe("skill directories (not just SKILL.md)", () => {
     it("installs supporting files under a skill's references/ and phases/ subdirectories, not just SKILL.md", () => {
-      const report = runInit();
+      const report = runInit({ installEngram: false, setAutoMode: false });
       expect(report.exitCode).toBe(0);
 
       const angularCorePath = join(claudeDir, "skills", "angular", "references", "core.md");
@@ -409,8 +410,8 @@ describe("runInit", () => {
     });
 
     it("is idempotent for skill supporting files — a second run reports them unchanged, no duplication", () => {
-      runInit();
-      const second = runInit();
+      runInit({ installEngram: false, setAutoMode: false });
+      const second = runInit({ installEngram: false, setAutoMode: false });
 
       expect(second.exitCode).toBe(0);
       const angularCoreRow = second.rows.find((r) => r.path === join("skills", "angular", "references", "core.md"));
@@ -427,7 +428,7 @@ describe("runInit", () => {
       const foreignSkillMd = "---\nname: angular\n---\n\nMy own hand-written skill.\n";
       writeFileSync(join(skillDir, "SKILL.md"), foreignSkillMd, "utf-8");
 
-      const report = runInit();
+      const report = runInit({ installEngram: false, setAutoMode: false });
 
       const skillMdRow = report.rows.find((r) => r.path === join("skills", "angular", "SKILL.md"));
       expect(skillMdRow?.status).toBe("skipped-foreign");
@@ -436,6 +437,111 @@ describe("runInit", () => {
       const coreRow = report.rows.find((r) => r.path === join("skills", "angular", "references", "core.md"));
       expect(coreRow?.status).toBe("skipped-foreign");
       expect(existsSync(join(skillDir, "references", "core.md"))).toBe(false);
+    });
+  });
+
+  describe("engram + auto mode (spec 0005)", () => {
+    function fakeSuccessRunner(calls: string[][] = []): ClaudeCliRunner {
+      return (args) => {
+        calls.push(args);
+        return { status: 0, stdout: "", stderr: "" };
+      };
+    }
+
+    // Covers: R1
+    it("installEngram default true: not yet enabled → installs via the injected runner, in order, and reports created", () => {
+      const calls: string[][] = [];
+      const report = runInit({ setAutoMode: false, engramRunner: fakeSuccessRunner(calls) });
+
+      const row = report.rows.find((r) => r.path === "plugins#engram");
+      expect(row?.status).toBe("created");
+      expect(calls).toEqual([
+        ["plugin", "marketplace", "add", "Gentleman-Programming/engram"],
+        ["plugin", "install", "engram@engram"],
+      ]);
+    });
+
+    // Covers: R2
+    it("installEngram: already enabled in settings.json → unchanged, runner never called", () => {
+      mkdirSync(claudeDir, { recursive: true });
+      writeFileSync(
+        join(claudeDir, "settings.json"),
+        JSON.stringify({ enabledPlugins: { "engram@engram": true } }, null, 2),
+        "utf-8",
+      );
+      const runner: ClaudeCliRunner = () => {
+        throw new Error("must not be called — engram is already enabled");
+      };
+
+      const report = runInit({ setAutoMode: false, engramRunner: runner });
+
+      const row = report.rows.find((r) => r.path === "plugins#engram");
+      expect(row?.status).toBe("unchanged");
+    });
+
+    // Covers: R3
+    it("installEngram: claude absent from PATH → error row with the manual commands, rest of init still proceeds", () => {
+      const runner: ClaudeCliRunner = () => ({
+        status: null,
+        stdout: "",
+        stderr: "",
+        error: Object.assign(new Error("ENOENT"), { code: "ENOENT" }) as NodeJS.ErrnoException,
+      });
+
+      const report = runInit({ setAutoMode: false, engramRunner: runner });
+
+      const row = report.rows.find((r) => r.path === "plugins#engram");
+      expect(row?.status).toBe("error");
+      expect(row?.detail).toContain("claude plugin marketplace add");
+      expect(row?.detail).toContain("claude plugin install");
+      // A failed engram install must not abort the rest of init.
+      expect(existsSync(join(claudeDir, "CLAUDE.md"))).toBe(true);
+      expect(report.exitCode).toBe(1); // engram's own row is an error, but init otherwise completed
+    });
+
+    // Covers: R9
+    it("installEngram: disabled by option → step skipped entirely, no row at all", () => {
+      const report = runInit({ installEngram: false, setAutoMode: false });
+
+      expect(report.rows.some((r) => r.path === "plugins#engram")).toBe(false);
+    });
+
+    // Covers: R5
+    it("setAutoMode default true: absent → sets permissions.defaultMode = auto and reports created", () => {
+      const report = runInit({ installEngram: false });
+
+      const row = report.rows.find((r) => r.path === "settings.json#defaultMode");
+      expect(row?.status).toBe("created");
+      const settings = JSON.parse(readFileSync(join(claudeDir, "settings.json"), "utf-8")) as {
+        permissions: { defaultMode: string };
+      };
+      expect(settings.permissions.defaultMode).toBe("auto");
+    });
+
+    // Covers: R6
+    it("setAutoMode: a foreign defaultMode value is reported skipped-foreign and never touched", () => {
+      mkdirSync(claudeDir, { recursive: true });
+      writeFileSync(
+        join(claudeDir, "settings.json"),
+        JSON.stringify({ permissions: { defaultMode: "plan" } }, null, 2),
+        "utf-8",
+      );
+
+      const report = runInit({ installEngram: false });
+
+      const row = report.rows.find((r) => r.path === "settings.json#defaultMode");
+      expect(row?.status).toBe("skipped-foreign");
+      const settings = JSON.parse(readFileSync(join(claudeDir, "settings.json"), "utf-8")) as {
+        permissions: { defaultMode: string };
+      };
+      expect(settings.permissions.defaultMode).toBe("plan");
+    });
+
+    // Covers: R9
+    it("setAutoMode: disabled by option → step skipped entirely, no row at all", () => {
+      const report = runInit({ installEngram: false, setAutoMode: false });
+
+      expect(report.rows.some((r) => r.path === "settings.json#defaultMode")).toBe(false);
     });
   });
 
@@ -453,7 +559,7 @@ describe("runInit", () => {
     it("overwrites a seeded foreign skill (SKILL.md + subfile) and stamps argos:file markers on both", () => {
       const { skillDir, foreignSkillMd, foreignSubfile } = seedForeignAngularSkill();
 
-      const report = runInit({ force: true });
+      const report = runInit({ force: true, installEngram: false, setAutoMode: false });
 
       expect(report.exitCode).toBe(0);
       const skillMdRow = report.rows.find((r) => r.path === join("skills", "angular", "SKILL.md"));
@@ -468,7 +574,7 @@ describe("runInit", () => {
 
       // The marker lands with the write — a later NON-forced run must treat
       // it as owned from now on, never skipped-foreign again.
-      const second = runInit();
+      const second = runInit({ installEngram: false, setAutoMode: false });
       const secondRow = second.rows.find((r) => r.path === join("skills", "angular", "SKILL.md"));
       expect(secondRow?.status).toBe("unchanged");
     });
@@ -476,7 +582,7 @@ describe("runInit", () => {
     it("without --force, the same seeded foreign skill is left skipped-foreign, byte-identical (unchanged default behavior)", () => {
       const { skillDir, foreignSkillMd, foreignSubfile } = seedForeignAngularSkill();
 
-      const report = runInit();
+      const report = runInit({ installEngram: false, setAutoMode: false });
 
       const skillMdRow = report.rows.find((r) => r.path === join("skills", "angular", "SKILL.md"));
       expect(skillMdRow?.status).toBe("skipped-foreign");
@@ -490,7 +596,7 @@ describe("runInit", () => {
       const foreignContent = "#!/usr/bin/env bash\necho hand-written hook\n";
       writeFileSync(guardPath, foreignContent, "utf-8");
 
-      const report = runInit({ force: true });
+      const report = runInit({ force: true, installEngram: false, setAutoMode: false });
 
       const row = report.rows.find((r) => r.path === join("hooks", "argos-guard-destructive.sh"));
       expect(row?.status).toBe("overwritten-foreign");
@@ -504,7 +610,7 @@ describe("runInit", () => {
       const foreignContent = "# My global notes\n\nHand-written, do not touch.\n";
       writeFileSync(join(claudeDir, "CLAUDE.md"), foreignContent, "utf-8");
 
-      runInit({ force: true });
+      runInit({ force: true, installEngram: false, setAutoMode: false });
 
       const claudeMd = readFileSync(join(claudeDir, "CLAUDE.md"), "utf-8");
       expect(claudeMd.startsWith(foreignContent)).toBe(true);
@@ -519,7 +625,7 @@ describe("runInit", () => {
       };
       writeFileSync(join(claudeDir, "settings.json"), JSON.stringify(foreign, null, 2), "utf-8");
 
-      const report = runInit({ force: true });
+      const report = runInit({ force: true, installEngram: false, setAutoMode: false });
       expect(report.exitCode).toBe(0);
 
       const settings = JSON.parse(readFileSync(join(claudeDir, "settings.json"), "utf-8")) as {
@@ -537,7 +643,7 @@ describe("runInit", () => {
     it("backup taken before the overwrite contains the foreign file's ORIGINAL content", () => {
       const { foreignSkillMd } = seedForeignAngularSkill();
 
-      const report = runInit({ force: true });
+      const report = runInit({ force: true, installEngram: false, setAutoMode: false });
 
       expect(report.backupPath).toBeTruthy();
       const backedUp = readFileSync(join(report.backupPath as string, "skills", "angular", "SKILL.md"), "utf-8");
@@ -570,13 +676,19 @@ describe("runInitInteractive", () => {
 
   it("--yes / no-TTY is byte-identical to calling runInit directly, even with a prompter injected", async () => {
     const prompter = makeFakePrompter([]); // never consulted — --yes short-circuits before any prompt call
-    const viaInteractive = await runInitInteractive({ language: "en", yes: true, prompter });
+    const viaInteractive = await runInitInteractive({
+      language: "en",
+      installEngram: false,
+      setAutoMode: false,
+      yes: true,
+      prompter,
+    });
 
     rmSync(claudeDir, { recursive: true, force: true });
     rmSync(argosHome, { recursive: true, force: true });
     mkdirSync(claudeDir, { recursive: true });
     mkdirSync(argosHome, { recursive: true });
-    const viaDirect = runInit({ language: "en" });
+    const viaDirect = runInit({ language: "en", installEngram: false, setAutoMode: false });
 
     expect(viaInteractive.exitCode).toBe(viaDirect.exitCode);
     expect(viaInteractive.rows).toEqual(viaDirect.rows);
@@ -591,7 +703,7 @@ describe("runInitInteractive", () => {
         return CANCEL as never;
       },
     };
-    const report = await runInitInteractive({ prompter });
+    const report = await runInitInteractive({ installEngram: false, setAutoMode: false, prompter });
 
     expect(calls).toBe(0);
     expect(report.exitCode).toBe(0);
@@ -621,6 +733,8 @@ describe("runInitInteractive", () => {
         "en", // language
         true, // installAgents
         false, // installHooks
+        false, // installEngram
+        false, // setAutoMode
         true, // final confirm
       ]);
 
@@ -646,7 +760,7 @@ describe("runInitInteractive", () => {
     });
 
     it("cancelling at the final confirm step also touches nothing on disk", async () => {
-      const prompter = makeFakePrompter(["es", true, true, false]); // final confirm = false
+      const prompter = makeFakePrompter(["es", true, true, false, false, false]); // final confirm = false
       const before = existsSync(claudeDir) ? readdirSync(claudeDir) : [];
 
       const report = await runInitInteractive({ prompter });
@@ -672,6 +786,8 @@ describe("runInitInteractive", () => {
           "es", // language
           true, // installAgents
           true, // installHooks
+          false, // installEngram
+          false, // setAutoMode
           true, // accept the force-overwrite confirm
           true, // final confirm
         ]);
@@ -690,6 +806,8 @@ describe("runInitInteractive", () => {
           "es",
           true,
           true,
+          false, // installEngram
+          false, // setAutoMode
           CANCEL, // cancel right at the force-overwrite confirm
         ]);
 
@@ -704,7 +822,7 @@ describe("runInitInteractive", () => {
       it("declining (not just cancelling) the force confirm also touches nothing on disk", async () => {
         const foreignSkillMd = seedForeignAngularSkill();
         const before = snapshotDir(claudeDir);
-        const prompter = makeFakePrompter(["es", true, true, false]); // decline the force confirm
+        const prompter = makeFakePrompter(["es", true, true, false, false, false]); // decline the force confirm
 
         const report = await runInitInteractive({ force: true, prompter });
 
@@ -717,7 +835,7 @@ describe("runInitInteractive", () => {
       it("no foreign files to overwrite → force never prompts, even with --force set", async () => {
         // Nothing seeded: a fresh claudeDir has zero foreign motor paths.
         let calls = 0;
-        const prompter = makeFakePrompter(["es", true, true, true]); // language, agents, hooks, final confirm — no force-confirm slot consumed
+        const prompter = makeFakePrompter(["es", true, true, false, false, true]); // language, agents, hooks, engram, auto mode, final confirm — no force-confirm slot consumed
         const wrapped: Prompter = {
           ...prompter,
           confirm: async (opts) => {
@@ -729,9 +847,10 @@ describe("runInitInteractive", () => {
         const report = await runInitInteractive({ force: true, prompter: wrapped });
 
         expect(report.exitCode).toBe(0);
-        // installAgents + installHooks + final confirm = 3 confirm calls; no
-        // extra force-confirm call was made since there was nothing foreign.
-        expect(calls).toBe(3);
+        // installAgents + installHooks + installEngram + setAutoMode + final
+        // confirm = 5 confirm calls; no extra force-confirm call was made
+        // since there was nothing foreign.
+        expect(calls).toBe(5);
       });
     });
 
@@ -749,6 +868,8 @@ describe("runInitInteractive", () => {
           "es", // language
           true, // installAgents
           true, // installHooks
+          false, // installEngram
+          false, // setAutoMode
           true, // accept the navori takeover prompt
           true, // final confirm
         ]);
@@ -769,6 +890,8 @@ describe("runInitInteractive", () => {
           "es",
           true,
           true,
+          false, // installEngram
+          false, // setAutoMode
           false, // decline the navori takeover prompt
           true, // final confirm — the rest of init still proceeds
         ]);
@@ -789,6 +912,8 @@ describe("runInitInteractive", () => {
           "es",
           true,
           true,
+          false, // installEngram
+          false, // setAutoMode
           CANCEL, // cancel right at the navori takeover prompt
         ]);
 
@@ -799,5 +924,104 @@ describe("runInitInteractive", () => {
         expect(snapshotDir(claudeDir)).toEqual(before);
       });
     });
+
+    describe("engram + auto mode wizard prompts (spec 0005)", () => {
+      // Covers: R4
+      it("declining the Engram prompt omits the whole step: no row, no process spawned", async () => {
+        const prompter = makeFakePrompter([
+          "es", // language
+          true, // installAgents
+          true, // installHooks
+          false, // decline installEngram
+          false, // setAutoMode
+          true, // final confirm
+        ]);
+
+        const report = await runInitInteractive({ prompter });
+
+        expect(report.exitCode).toBe(0);
+        expect(report.rows.some((r) => r.path === "plugins#engram")).toBe(false);
+      });
+
+      // Covers: R7
+      it("declining the auto mode prompt omits the whole step: key never touched, no row", async () => {
+        const prompter = makeFakePrompter([
+          "es",
+          true,
+          true,
+          false, // installEngram
+          false, // decline setAutoMode
+          true, // final confirm
+        ]);
+
+        const report = await runInitInteractive({ prompter });
+
+        expect(report.exitCode).toBe(0);
+        expect(report.rows.some((r) => r.path === "settings.json#defaultMode")).toBe(false);
+      });
+
+      // Covers: R4, R7
+      it("accepting both prompts (with an injected engramRunner) writes both rows", async () => {
+        const prompter = makeFakePrompter([
+          "es",
+          true,
+          true,
+          true, // accept installEngram
+          true, // accept setAutoMode
+          true, // final confirm
+        ]);
+        const engramRunner: ClaudeCliRunner = () => ({ status: 0, stdout: "", stderr: "" });
+
+        const report = await runInitInteractive({ prompter, engramRunner });
+
+        expect(report.exitCode).toBe(0);
+        expect(report.rows.find((r) => r.path === "plugins#engram")?.status).toBe("created");
+        expect(report.rows.find((r) => r.path === "settings.json#defaultMode")?.status).toBe("created");
+      });
+    });
+  });
+});
+
+describe("runInitInteractive — non-interactive defaults (spec 0005 R9)", () => {
+  let claudeDir: string;
+  let argosHome: string;
+  const originalClaudeDir = process.env.CLAUDE_CONFIG_DIR;
+  const originalArgosHome = process.env.ARGOS_HOME;
+
+  beforeEach(() => {
+    claudeDir = mkdtempSync(join(tmpdir(), "argos-init-r9-claude-"));
+    argosHome = mkdtempSync(join(tmpdir(), "argos-init-r9-home-"));
+    process.env.CLAUDE_CONFIG_DIR = claudeDir;
+    process.env.ARGOS_HOME = argosHome;
+  });
+
+  afterEach(() => {
+    rmSync(claudeDir, { recursive: true, force: true });
+    rmSync(argosHome, { recursive: true, force: true });
+    if (originalClaudeDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = originalClaudeDir;
+    if (originalArgosHome === undefined) delete process.env.ARGOS_HOME;
+    else process.env.ARGOS_HOME = originalArgosHome;
+  });
+
+  // Covers: R9
+  it("--yes: installEngram/setAutoMode both default true, with zero prompts", async () => {
+    const prompter = makeFakePrompter([]); // never consulted — --yes short-circuits before any prompt call
+    const engramRunner: ClaudeCliRunner = () => ({ status: 0, stdout: "", stderr: "" });
+
+    const report = await runInitInteractive({ yes: true, prompter, engramRunner });
+
+    expect(report.rows.find((r) => r.path === "plugins#engram")?.status).toBe("created");
+    expect(report.rows.find((r) => r.path === "settings.json#defaultMode")?.status).toBe("created");
+  });
+
+  // Covers: R9
+  it("no real TTY (this test runner has none attached): installEngram/setAutoMode both default true, with zero prompts", async () => {
+    const engramRunner: ClaudeCliRunner = () => ({ status: 0, stdout: "", stderr: "" });
+
+    const report = await runInitInteractive({ engramRunner });
+
+    expect(report.rows.find((r) => r.path === "plugins#engram")?.status).toBe("created");
+    expect(report.rows.find((r) => r.path === "settings.json#defaultMode")?.status).toBe("created");
   });
 });

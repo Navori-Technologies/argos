@@ -18,6 +18,22 @@ function initGitRepo(dir: string): void {
   execFileSync("git", ["config", "user.name", "Test"], { cwd: dir });
 }
 
+/**
+ * Test-only simulation of a real, successful `claude plugin install
+ * engram@engram` (spec 0005): merges `enabledPlugins["engram@engram"] = true`
+ * into `settingsPath`. `runInit`/`installEngramPlugin` never write this key
+ * themselves (only the real `claude` CLI does on success — see
+ * lib/engram-plugin.ts) — tests that need a "fully clean, nothing to
+ * report" fixture (e.g. `checkEngramPlugin`'s own silence case) have to seed
+ * it by hand instead of going through a real (network-dependent) `claude`
+ * process.
+ */
+function seedEngramEnabled(settingsPath: string): void {
+  const settings = JSON.parse(readFileSync(settingsPath, "utf-8")) as Record<string, unknown>;
+  settings.enabledPlugins = { ...(settings.enabledPlugins as Record<string, unknown> | undefined), "engram@engram": true };
+  writeFileSync(settingsPath, JSON.stringify(settings, null, 2), "utf-8");
+}
+
 describe("runDoctor", () => {
   let claudeDir: string;
   let argosHome: string;
@@ -44,14 +60,15 @@ describe("runDoctor", () => {
   });
 
   it("reports a clean state with exit 0 when the motor is fresh and cwd is not a repo", () => {
-    runInit();
+    runInit({ installEngram: false, setAutoMode: true });
+    seedEngramEnabled(join(claudeDir, "settings.json"));
     const report = runDoctor({ cwd: nonRepoDir });
     expect(report.exitCode).toBe(0);
     expect(report.findings).toEqual([]);
   });
 
   it("reports an outdated motor block", () => {
-    runInit();
+    runInit({ installEngram: false, setAutoMode: false });
     const claudeMdPath = join(claudeDir, "CLAUDE.md");
     let claudeMd = readFileSync(claudeMdPath, "utf-8");
     claudeMd = injectBlock(claudeMd, "identidad", "-1", "stale content");
@@ -64,7 +81,7 @@ describe("runDoctor", () => {
   });
 
   it("reports an outdated disciplina-skills block the same way it reports every other managed block", () => {
-    runInit();
+    runInit({ installEngram: false, setAutoMode: false });
     const claudeMdPath = join(claudeDir, "CLAUDE.md");
     let claudeMd = readFileSync(claudeMdPath, "utf-8");
     claudeMd = injectBlock(claudeMd, "disciplina-skills", "-1", "stale content");
@@ -82,7 +99,7 @@ describe("runDoctor", () => {
 
   it("reports ficha drift when argos.config.json changes without --refresh", () => {
     initGitRepo(nonRepoDir);
-    runInit();
+    runInit({ installEngram: false, setAutoMode: false });
     runAdopt({ cwd: nonRepoDir });
 
     const config = readConfig(nonRepoDir);
@@ -95,7 +112,7 @@ describe("runDoctor", () => {
   });
 
   it("reports an outdated motor block as a warning suggesting argos init (older-than-binary)", () => {
-    runInit();
+    runInit({ installEngram: false, setAutoMode: false });
     const claudeMdPath = join(claudeDir, "CLAUDE.md");
     let claudeMd = readFileSync(claudeMdPath, "utf-8");
     claudeMd = injectBlock(claudeMd, "identidad", "-1", "stale content");
@@ -110,7 +127,7 @@ describe("runDoctor", () => {
   });
 
   it("reports a block newer than the binary as a warning suggesting a package upgrade", () => {
-    runInit();
+    runInit({ installEngram: false, setAutoMode: false });
     const claudeMdPath = join(claudeDir, "CLAUDE.md");
     let claudeMd = readFileSync(claudeMdPath, "utf-8");
     claudeMd = injectBlock(claudeMd, "identidad", "999.0.0", "content from the future");
@@ -127,7 +144,8 @@ describe("runDoctor", () => {
   });
 
   it("reports a clean state (no version findings) when the block version matches the binary exactly", () => {
-    const report = runInit();
+    const report = runInit({ installEngram: false, setAutoMode: true });
+    seedEngramEnabled(join(claudeDir, "settings.json"));
     const doctorReport = runDoctor({ cwd: nonRepoDir });
 
     expect(report.exitCode).toBe(0);
@@ -138,7 +156,7 @@ describe("runDoctor", () => {
   it.skipIf(process.platform === "win32")(
     "reports an error finding instead of throwing when the global CLAUDE.md is unreadable",
     () => {
-      runInit();
+      runInit({ installEngram: false, setAutoMode: false });
       const claudeMdPath = join(claudeDir, "CLAUDE.md");
       chmodSync(claudeMdPath, 0o000);
       try {
@@ -158,7 +176,7 @@ describe("runDoctor", () => {
     "reports an error finding instead of throwing when the repo's ./CLAUDE.md is unreadable",
     () => {
       initGitRepo(nonRepoDir);
-      runInit();
+      runInit({ installEngram: false, setAutoMode: false });
       runAdopt({ cwd: nonRepoDir });
       const repoClaudeMdPath = join(nonRepoDir, "CLAUDE.md");
       chmodSync(repoClaudeMdPath, 0o000);
@@ -176,7 +194,7 @@ describe("runDoctor", () => {
   );
 
   it("flags a duplicated managed block in CLAUDE.md as a warning", () => {
-    runInit();
+    runInit({ installEngram: false, setAutoMode: false });
     const claudeMdPath = join(claudeDir, "CLAUDE.md");
     const claudeMd = readFileSync(claudeMdPath, "utf-8");
     // Simulate crash residue: append a second raw copy of the "identidad" block by id.
@@ -197,7 +215,7 @@ describe("runDoctor", () => {
 
   it("warns when qualityGate.fast is still the NO_GATE_PLACEHOLDER left by adopt", () => {
     initGitRepo(nonRepoDir);
-    runInit();
+    runInit({ installEngram: false, setAutoMode: false });
     // No package.json at all → buildQualityGateFast has nothing to detect from → placeholder.
     runAdopt({ cwd: nonRepoDir });
 
@@ -210,7 +228,7 @@ describe("runDoctor", () => {
   });
 
   it("flags a foreign skill file blocking the bundled motor version, with the blocked-version message", () => {
-    runInit();
+    runInit({ installEngram: false, setAutoMode: false });
     const skillMdPath = join(claudeDir, "skills", "angular", "SKILL.md");
     const foreignContent = "---\nname: angular\n---\n\nMy own hand-written skill, no marker.\n";
     writeFileSync(skillMdPath, foreignContent, "utf-8");
@@ -233,7 +251,7 @@ describe("runDoctor", () => {
 
   it("reports a readable error finding for an invalid argos.config.json", () => {
     initGitRepo(nonRepoDir);
-    runInit();
+    runInit({ installEngram: false, setAutoMode: false });
     runAdopt({ cwd: nonRepoDir });
 
     writeFileSync(join(nonRepoDir, "argos.config.json"), JSON.stringify({ qualityGate: {} }), "utf-8");
@@ -249,7 +267,8 @@ describe("runDoctor", () => {
   // --- F2: hooks ---------------------------------------------------------
 
   it("stays silent about hooks when the motor is freshly installed", () => {
-    runInit();
+    runInit({ installEngram: false, setAutoMode: true });
+    seedEngramEnabled(join(claudeDir, "settings.json"));
     const report = runDoctor({ cwd: nonRepoDir });
 
     expect(report.exitCode).toBe(0);
@@ -257,7 +276,7 @@ describe("runDoctor", () => {
   });
 
   it("warns when a global hook script is missing", () => {
-    runInit();
+    runInit({ installEngram: false, setAutoMode: false });
     const hookPath = join(claudeDir, "hooks", "argos-guard-destructive.sh");
     rmSync(hookPath);
 
@@ -272,7 +291,7 @@ describe("runDoctor", () => {
   });
 
   it("warns when a hook script's marker version is older than the binary", () => {
-    runInit();
+    runInit({ installEngram: false, setAutoMode: false });
     const hookPath = join(claudeDir, "hooks", "argos-guard-destructive.sh");
     const hookContent = readFileSync(hookPath, "utf-8").replace(/# argos:file v="[^"]*"/, '# argos:file v="-1"');
     writeFileSync(hookPath, hookContent, "utf-8");
@@ -289,7 +308,7 @@ describe("runDoctor", () => {
   });
 
   it("warns when settings.json references an orphaned hook (script file gone)", () => {
-    runInit();
+    runInit({ installEngram: false, setAutoMode: false });
     const hookPath = join(claudeDir, "hooks", "argos-guard-destructive.sh");
     rmSync(hookPath);
 
@@ -304,7 +323,7 @@ describe("runDoctor", () => {
   });
 
   it("flags a settings.json hook entry as orphaned when its script path is a directory, not a file", () => {
-    runInit();
+    runInit({ installEngram: false, setAutoMode: false });
     const hookPath = join(claudeDir, "hooks", "argos-guard-destructive.sh");
     // `existsSync` alone is true for directories too — replacing the script
     // with a directory of the same name must still be flagged as orphaned.
@@ -322,7 +341,7 @@ describe("runDoctor", () => {
   });
 
   it("reports an error finding instead of throwing when settings.json has invalid JSON", () => {
-    runInit();
+    runInit({ installEngram: false, setAutoMode: false });
     const settingsPath = join(claudeDir, "settings.json");
     writeFileSync(settingsPath, "{ not valid json", "utf-8");
 
@@ -337,7 +356,7 @@ describe("runDoctor", () => {
   // --- spec 0004: voice activation (settings.json.outputStyle) -------------
 
   it("warns when the voice asset is installed but settings.json.outputStyle isn't Argos", () => {
-    runInit();
+    runInit({ installEngram: false, setAutoMode: false });
     const settingsPath = join(claudeDir, "settings.json");
     const settings = JSON.parse(readFileSync(settingsPath, "utf-8")) as Record<string, unknown>;
     settings.outputStyle = "my-custom-voice";
@@ -351,18 +370,75 @@ describe("runDoctor", () => {
   });
 
   it("does not warn about the voice when outputStyle is already Argos", () => {
-    runInit();
+    runInit({ installEngram: false, setAutoMode: false });
 
     const report = runDoctor({ cwd: nonRepoDir });
 
     expect(report.findings.some((f) => /voz de Argos está instalada pero no activa/.test(f.message))).toBe(false);
   });
 
+  // --- spec 0005: Engram + auto mode ----------------------------------------
+
+  // Covers: R8
+  it("warns when the engram@engram plugin isn't enabled", () => {
+    runInit({ installEngram: false, setAutoMode: true });
+
+    const report = runDoctor({ cwd: nonRepoDir });
+
+    expect(
+      report.findings.some((f) => f.level === "warning" && /engram@engram no está habilitado/.test(f.message)),
+    ).toBe(true);
+  });
+
+  // Covers: R8
+  it("stays silent about engram once enabledPlugins['engram@engram'] is true", () => {
+    runInit({ installEngram: false, setAutoMode: true });
+    seedEngramEnabled(join(claudeDir, "settings.json"));
+
+    const report = runDoctor({ cwd: nonRepoDir });
+
+    expect(report.findings.some((f) => /engram@engram/.test(f.message))).toBe(false);
+  });
+
+  // Covers: R8
+  it("warns when permissions.defaultMode is absent", () => {
+    runInit({ installEngram: false, setAutoMode: false });
+
+    const report = runDoctor({ cwd: nonRepoDir });
+
+    expect(
+      report.findings.some((f) => f.level === "warning" && /permissions\.defaultMode no está seteado/.test(f.message)),
+    ).toBe(true);
+  });
+
+  // Covers: R8
+  it("stays silent about auto mode once permissions.defaultMode is set to auto", () => {
+    runInit({ installEngram: false, setAutoMode: true });
+
+    const report = runDoctor({ cwd: nonRepoDir });
+
+    expect(report.findings.some((f) => /defaultMode/.test(f.message))).toBe(false);
+  });
+
+  // Covers: R8
+  it("stays silent about auto mode when permissions.defaultMode is set to a foreign value (the operator's own choice)", () => {
+    runInit({ installEngram: false, setAutoMode: false });
+    mkdirSync(claudeDir, { recursive: true });
+    const settingsPath = join(claudeDir, "settings.json");
+    const settings = JSON.parse(readFileSync(settingsPath, "utf-8")) as Record<string, unknown>;
+    settings.permissions = { defaultMode: "plan" };
+    writeFileSync(settingsPath, JSON.stringify(settings, null, 2), "utf-8");
+
+    const report = runDoctor({ cwd: nonRepoDir });
+
+    expect(report.findings.some((f) => /defaultMode/.test(f.message))).toBe(false);
+  });
+
   // --- F2: workspaces ------------------------------------------------------
 
   it("suggests `argos workspace link` when the repo isn't registered in any workspace", () => {
     initGitRepo(nonRepoDir);
-    runInit();
+    runInit({ installEngram: false, setAutoMode: false });
     runAdopt({ cwd: nonRepoDir });
 
     const report = runDoctor({ cwd: nonRepoDir });
@@ -374,7 +450,7 @@ describe("runDoctor", () => {
   });
 
   it("warns about workspace registry entries whose repo path no longer exists on disk", () => {
-    runInit();
+    runInit({ installEngram: false, setAutoMode: false });
     const registry: WorkspaceRegistry = {
       bonum: {
         match: { remotes: [], paths: [] },
@@ -395,7 +471,7 @@ describe("runDoctor", () => {
 
   it("reports a structured error finding instead of crashing when workspaces.json is corrupt", () => {
     initGitRepo(nonRepoDir);
-    runInit();
+    runInit({ installEngram: false, setAutoMode: false });
     runAdopt({ cwd: nonRepoDir });
     writeFileSync(join(argosHome, "workspaces.json"), "{ not valid json", "utf-8");
 
@@ -409,7 +485,7 @@ describe("runDoctor", () => {
 
   it("warns about a stale registered path when a linked repo relocates", () => {
     initGitRepo(nonRepoDir);
-    runInit();
+    runInit({ installEngram: false, setAutoMode: false });
     runAdopt({ cwd: nonRepoDir });
 
     const config = readConfig(nonRepoDir);
@@ -434,7 +510,7 @@ describe("runDoctor", () => {
   // --- dangling/unclosed markers -------------------------------------------
 
   it("flags a dangling open marker (no matching close) in the global CLAUDE.md as an issue", () => {
-    runInit();
+    runInit({ installEngram: false, setAutoMode: false });
     const claudeMdPath = join(claudeDir, "CLAUDE.md");
     // Hand-crafted open marker with no matching close — crash residue or manual corruption.
     const dangling = '<!-- argos:managed id="identidad" v="1.0.0" -->\nNever closed.\n';
@@ -450,7 +526,7 @@ describe("runDoctor", () => {
 
   it("flags a dangling open marker in the repo's ./CLAUDE.md as an issue", () => {
     initGitRepo(nonRepoDir);
-    runInit();
+    runInit({ installEngram: false, setAutoMode: false });
     runAdopt({ cwd: nonRepoDir });
 
     const repoClaudeMdPath = join(nonRepoDir, "CLAUDE.md");
@@ -469,7 +545,7 @@ describe("runDoctor", () => {
 
   it("does not false-positive ficha drift for a >6-skill ficha that renders as wrapped sub-lines", () => {
     initGitRepo(nonRepoDir);
-    runInit();
+    runInit({ installEngram: false, setAutoMode: false });
     runAdopt({ cwd: nonRepoDir });
 
     const config = readConfig(nonRepoDir);
