@@ -38,6 +38,12 @@ guardas automáticas — verifica el gate a mano.
 | Compleja (migración, refactor multi-capa) | `ticket-audit` → 2–3 `researcher`/`explorer` en paralelo → `implementer` → `reviewer` → `commit-pr-pilot` |
 | Muy compleja | Divide en sub-tareas y reaplica la tabla |
 
+Cambio Grande (estimado >400 líneas o >5 archivos, componente compartido
+multi-flujo, o hot path — auth/update/security/payments) → además del
+escalado de la tabla, el ciclo pasa por flujo SDD: `spec-bootstrap`
+(requirements/design/tasks) tras el audit y `judgment-day` al cierre de
+design y de apply (ver triage de Fase 0 en `ticket-intake`).
+
 Investigación con preguntas acotadas → `researcher`; mapas amplios (¿dónde
 vive X?) → `explorer`. Con audit previo, pasa al `implementer` la ruta de
 `.claude/progress/audit_<ID>.md` — relativa al repo donde trabajas, nunca al
@@ -132,6 +138,17 @@ medio para implementación estándar, tier alto solo donde el juicio o el
 diseño deciden el resultado. Nunca todos los agentes al tier alto por
 default.
 
+Los agentes del motor ya traen su tier PINEADO en el frontmatter (`model:`
+en `~/.claude/agents/<agente>.md` — ej. `explorer` y `commit-pr-pilot` en
+tier bajo, `implementer`/`reviewer`/lentes 4R en tier medio). Al invocar un
+agente del motor, omite el parámetro `model`: el pin del frontmatter manda;
+overridearlo exige una razón puntual de ESA sub-tarea, dicha explícita al
+lanzar. Para agentes SIN pin propio (`general-purpose`, guías externas,
+etc.), setea `model` explícito con el mismo criterio — nunca los dejes
+heredar el modelo de la sesión por omisión. Y al reportar qué modelo corrió
+un subagente, verifícalo (frontmatter del agente o transcript de la corrida)
+— nunca lo infieras ni lo reportes de memoria.
+
 ### Ejecución continua (no pausar entre tareas)
 
 Aprobado el plan/scope, ejecuta TODAS las sub-tareas sin pedir confirmación
@@ -155,8 +172,11 @@ persiste en git) y lo consolidas tú, nunca los subagentes — cada
 el reporte. Al cerrar el ciclo, cuando `review_<feature>.md` diga `APPROVED`,
 invoca `commit-pr-pilot` (pre-flight: working tree limpio, no estás en la
 rama base del repo, el quality gate del repo (ficha/argos.config.json) en
-verde, `gh auth status` ok). Si dice `CHANGES_REQUESTED`, lanza otro
-`implementer` fresco — no el pilot.
+verde, `gh auth status` ok, y confirmación funcional del cambio registrada
+en `impl_<feature>.md` — smoke de endpoint, verificación conducida en
+navegador, o confirmación explícita del operador; sin ella NO se abre el
+PR, el gate estático no la sustituye). Si dice `CHANGES_REQUESTED`, lanza
+otro `implementer` fresco — no el pilot.
 
 ### Cuándo NO orquestar (hazlo tú directo)
 
