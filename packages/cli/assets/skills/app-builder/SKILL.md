@@ -41,4 +41,4 @@ El detalle completo de cada fase (objetivo, protocolo, skills, cómo verificar e
 
 ## Result contract
 
-Cada subagente de fase devuelve: `status` (done | partial | blocked), `executive_summary`, `artifacts`, `gate_evidence`, `risks`, `skill_resolution`. Antes de avanzar a la fase siguiente, el orquestador valida el contrato completo, la existencia real de los artifacts declarados, cero alucinación y cero drift contra el documento de producto.
+Cada subagente de fase devuelve: `status` (done | partial | blocked), `executive_summary`, `artifacts`, `gate_evidence`, `risks`, `skill_resolution`. El `gate_evidence` exige EXIT CODES (`cmd; echo $?`, nunca ausencia de output — un pipe enmascara el fallo) y `git log --oneline` + `git status --short` vacío que prueben los commits atómicos del contrato: trabajo en working tree es gate fallido aunque los tests pasen. Antes de avanzar a la fase siguiente, el orquestador valida el contrato completo, la existencia real de los artifacts declarados, cero alucinación y cero drift contra el documento de producto.
