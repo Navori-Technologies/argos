@@ -32,7 +32,7 @@ Un documento de definición de producto aprobado por el usuario, con el nombre d
    <nombre definitivo, tono de marca, referencias>
    ```
 
-   La sección de nombre y marca es parte del documento, no un paso aparte. Apunta a un máximo de 2 iteraciones del documento (economía de tokens).
+   La sección de nombre y marca es parte del documento, no un paso aparte — pero el nombre NUNCA lo eliges tú: antes de redactar, presenta un brief de 2–4 nombres candidatos (significado + racional) y deja que el usuario elija o contraproponga; el documento se redacta con el nombre elegido. Apunta a un máximo de 2 iteraciones del documento (economía de tokens).
 3. **Gate: aprobación explícita CON nombre definitivo.** No avances al scaffold sin que el usuario apruebe el documento y confirme el nombre definitivo. El nombre definitivo es un artifact declarado de esta fase y parte de su gate.
 4. **Sincroniza el nombre al config.** Al cerrar la fase, guarda el nombre definitivo en el campo `name` de `argos.config.json` del repo (o ejecuta `argos adopt --refresh` si el detector automático ya puede inferirlo una vez creado el repo). Renombrar la carpeta es opcional y cosmético; nada del motor depende del basename después del init.
 

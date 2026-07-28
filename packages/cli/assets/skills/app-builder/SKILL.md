@@ -19,12 +19,13 @@ Eres un COORDINADOR, no un ejecutor. Corres la fase 0 y delegas cada fase siguie
 6. Mantén el dominio puro y cubierto por tests, separado del wiring de persistencia.
 7. Commit tras cada chunk de trabajo: conventional commits, sin atribución de IA.
 8. Documenta el progreso de cada fase en un lugar durable (Engram u otro registro persistente del repo).
+9. Ninguna versión de stack se escribe de memoria: resuélvela del registry al lanzar (`npm view <pkg> version`) y pinéala exacta en el prompt del subagente. En los prompts, apunta a las secciones exactas que la fase necesita, nunca a documentos completos; capea validaciones largas con timeout; y el trabajo sobre archivos disjuntos dentro de una fase se despacha a agentes paralelos en el mismo turno.
 
 ## Tabla de fases
 
 | n | Fase | Objetivo | Gate | Modelo |
 |---|------|----------|------|--------|
-| 0 | product | Documento de producto + nombre definitivo | El usuario aprueba el documento explícitamente, nombre incluido | fable |
+| 0 | product | Documento de producto + nombre definitivo elegido por el usuario desde un brief de 2–4 candidatos | El usuario aprueba el documento explícitamente, nombre incluido | fable |
 | 1 | scaffold | Monorepo + app booteando en device | Bootea en device real y los primitivos consumen tokens | haiku |
 | 2 | data | Schema, migraciones y seed | Typecheck limpio y el seed no duplica | sonnet |
 | 3 | domain | Motor de dominio puro + tests | Tests pasan y typecheck limpio | sonnet |
