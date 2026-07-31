@@ -88,7 +88,7 @@ describe("runRemove", () => {
       };
       writeFileSync(join(claudeDir, "settings.json"), JSON.stringify(foreignSettings, null, 2), "utf-8");
 
-      const initReport = runInit({ installEngram: false, setAutoMode: false });
+      const initReport = runInit({ installEngram: false, setAutoMode: false, installGraphify: false });
       expect(initReport.exitCode).toBe(0);
 
       // Sanity: init actually installed argos-owned stuff on top.
@@ -134,7 +134,7 @@ describe("runRemove", () => {
     });
 
     it("deletes CLAUDE.md entirely when it becomes empty after stripping argos's own blocks", () => {
-      runInit({ installEngram: false, setAutoMode: false }); // CLAUDE.md now holds ONLY the 5 argos-managed blocks
+      runInit({ installEngram: false, setAutoMode: false, installGraphify: false }); // CLAUDE.md now holds ONLY the 5 argos-managed blocks
 
       const report = runRemove({ apply: true });
       expect(report.exitCode).toBe(0);
@@ -144,7 +144,7 @@ describe("runRemove", () => {
 
   describe("--purge", () => {
     it("removes ~/.argos data including backups when combined with --apply", () => {
-      runInit({ installEngram: false, setAutoMode: false });
+      runInit({ installEngram: false, setAutoMode: false, installGraphify: false });
       expect(existsSync(join(argosHome, "global.json"))).toBe(true);
 
       const report = runRemove({ apply: true, purge: true });
@@ -156,7 +156,7 @@ describe("runRemove", () => {
     });
 
     it("keeps ~/.argos data by default (no --purge)", () => {
-      runInit({ installEngram: false, setAutoMode: false });
+      runInit({ installEngram: false, setAutoMode: false, installGraphify: false });
       runRemove({ apply: true });
       expect(existsSync(join(argosHome, "global.json"))).toBe(true);
     });
@@ -164,7 +164,7 @@ describe("runRemove", () => {
 
   describe("preview mode", () => {
     it("changes nothing on disk while still reporting what would be removed", () => {
-      runInit({ installEngram: false, setAutoMode: false });
+      runInit({ installEngram: false, setAutoMode: false, installGraphify: false });
 
       const before = snapshot(claudeDir);
       const beforeHome = snapshot(argosHome);
@@ -186,13 +186,13 @@ describe("runRemove", () => {
     });
 
     it("also previews --purge without touching ~/.argos", () => {
-      runInit({ installEngram: false, setAutoMode: false });
+      runInit({ installEngram: false, setAutoMode: false, installGraphify: false });
       const beforeHome = snapshot(argosHome);
 
       const report = runRemove({ purge: true }); // no apply
       expect(existsSync(join(argosHome, "global.json"))).toBe(true);
       expect(snapshot(argosHome)).toEqual(beforeHome);
-      // runInit({ installEngram: false, setAutoMode: false }) already created a backup dir via its own createBackup call
+      // runInit({ installEngram: false, setAutoMode: false, installGraphify: false }) already created a backup dir via its own createBackup call
       // — a preview run must not touch it, and must still warn since --purge
       // would remove it on a real (--apply) run.
       expect(existsSync(join(argosHome, "backups"))).toBe(true);
@@ -202,7 +202,7 @@ describe("runRemove", () => {
 
   describe("corrupt settings.json", () => {
     it("refuses the same way the merge path does, reporting an error and leaving the file untouched", () => {
-      runInit({ installEngram: false, setAutoMode: false });
+      runInit({ installEngram: false, setAutoMode: false, installGraphify: false });
       const settingsPath = join(claudeDir, "settings.json");
       const corrupt = "{ not valid json";
       writeFileSync(settingsPath, corrupt, "utf-8");
@@ -217,7 +217,7 @@ describe("runRemove", () => {
     });
 
     it("reports the same corrupt-JSON refusal in preview mode too, without writing anything", () => {
-      runInit({ installEngram: false, setAutoMode: false });
+      runInit({ installEngram: false, setAutoMode: false, installGraphify: false });
       const settingsPath = join(claudeDir, "settings.json");
       const corrupt = "[1, 2, 3]";
       writeFileSync(settingsPath, corrupt, "utf-8");
@@ -233,7 +233,7 @@ describe("runRemove", () => {
 
   describe("skill directories (subfiles, not just SKILL.md)", () => {
     it("removes exactly the shipped subfiles for a skill, but preserves a user-added extra file in the same directory", () => {
-      runInit({ installEngram: false, setAutoMode: false });
+      runInit({ installEngram: false, setAutoMode: false, installGraphify: false });
       const angularDir = join(claudeDir, "skills", "angular");
       expect(existsSync(join(angularDir, "references", "core.md"))).toBe(true);
 
@@ -264,7 +264,7 @@ describe("runRemove", () => {
       const foreignSkillMd = "---\nname: angular\n---\n\nMy own hand-written skill.\n";
       writeFileSync(join(skillDir, "SKILL.md"), foreignSkillMd, "utf-8");
 
-      runInit({ installEngram: false, setAutoMode: false }); // skips the whole foreign angular dir (see init.test.ts)
+      runInit({ installEngram: false, setAutoMode: false, installGraphify: false }); // skips the whole foreign angular dir (see init.test.ts)
       const report = runRemove({ apply: true });
       expect(report.exitCode).toBe(0);
 
@@ -312,7 +312,7 @@ describe("runRemove", () => {
 
   describe("scope note", () => {
     it("always ends the report with an info row stating repo-side artifacts are out of scope", () => {
-      runInit({ installEngram: false, setAutoMode: false });
+      runInit({ installEngram: false, setAutoMode: false, installGraphify: false });
       const report = runRemove();
 
       const scopeRow = report.rows.at(-1);
@@ -326,8 +326,8 @@ describe("runRemove", () => {
       const repoDir = mkdtempSync(join(tmpdir(), "argos-remove-repo-"));
       try {
         initGitRepo(repoDir);
-        runInit({ installEngram: false, setAutoMode: false });
-        runAdopt({ cwd: repoDir });
+        runInit({ installEngram: false, setAutoMode: false, installGraphify: false });
+        runAdopt({ cwd: repoDir, graphifyHasBinary: () => false });
 
         const configPath = join(repoDir, "argos.config.json");
         const repoClaudeMdPath = join(repoDir, "CLAUDE.md");
@@ -347,9 +347,46 @@ describe("runRemove", () => {
     });
   });
 
+  describe("graphify no-goal (spec 0006 R14)", () => {
+    // Covers: R14
+    it("leaves skills/graphify/SKILL.md (no argos:file marker) and a plain '## graphify' CLAUDE.md block byte-identical after remove --apply", () => {
+      runInit({ installEngram: false, setAutoMode: false, installGraphify: false });
+
+      // graphify install writes its own SKILL.md without the argos:file
+      // marker — plain content, same shape as the real installer.
+      const graphifySkillDir = join(claudeDir, "skills", "graphify");
+      mkdirSync(graphifySkillDir, { recursive: true });
+      const graphifySkillMdContent = "---\nname: graphify\n---\n\nGraphify skill, installed by graphify itself.\n";
+      const graphifySkillMdPath = join(graphifySkillDir, "SKILL.md");
+      writeFileSync(graphifySkillMdPath, graphifySkillMdContent, "utf-8");
+
+      // graphify install also appends a plain '## graphify' block to
+      // CLAUDE.md, outside of any argos:managed marker.
+      const claudeMdPath = join(claudeDir, "CLAUDE.md");
+      const before = readFileSync(claudeMdPath, "utf-8");
+      const graphifyBlock = "\n## graphify\n\nGraphify config, written by graphify install itself.\n";
+      writeFileSync(claudeMdPath, before + graphifyBlock, "utf-8");
+
+      const report = runRemove({ apply: true });
+      expect(report.exitCode).toBe(0);
+
+      // The graphify skill directory is untouched — unmarked SKILL.md means
+      // the whole directory is foreign to processSkillsDir.
+      expect(readFileSync(graphifySkillMdPath, "utf-8")).toBe(graphifySkillMdContent);
+      const skillRow = report.rows.find((r) => r.path === join("skills", "graphify", "SKILL.md"));
+      expect(skillRow?.status).toBe("skipped-foreign");
+
+      // The '## graphify' block survives byte-identical — it's outside
+      // every argos:managed marker, so processClaudeMd never touches it.
+      // (The argos-managed blocks themselves are correctly stripped; that's
+      // covered elsewhere — this test only asserts the graphify block.)
+      expect(readFileSync(claudeMdPath, "utf-8")).toContain(graphifyBlock);
+    });
+  });
+
   describe("voice activation (settings.json.outputStyle)", () => {
     it("removes outputStyle when it's exactly Argos", () => {
-      runInit({ installEngram: false, setAutoMode: false });
+      runInit({ installEngram: false, setAutoMode: false, installGraphify: false });
       const settingsPath = join(claudeDir, "settings.json");
       expect((JSON.parse(readFileSync(settingsPath, "utf-8")) as { outputStyle: string }).outputStyle).toBe("Argos");
 
@@ -363,7 +400,7 @@ describe("runRemove", () => {
     });
 
     it("never touches a foreign (non-Argos) outputStyle", () => {
-      runInit({ installEngram: false, setAutoMode: false });
+      runInit({ installEngram: false, setAutoMode: false, installGraphify: false });
       const settingsPath = join(claudeDir, "settings.json");
       const settings = JSON.parse(readFileSync(settingsPath, "utf-8")) as Record<string, unknown>;
       settings.outputStyle = "my-custom-voice";
@@ -379,7 +416,7 @@ describe("runRemove", () => {
     });
 
     it("preview mode reports would-remove and writes nothing", () => {
-      runInit({ installEngram: false, setAutoMode: false });
+      runInit({ installEngram: false, setAutoMode: false, installGraphify: false });
       const settingsPath = join(claudeDir, "settings.json");
       const before = readFileSync(settingsPath, "utf-8");
 
@@ -394,7 +431,7 @@ describe("runRemove", () => {
   describe("auto mode (settings.json.permissions.defaultMode) — spec 0005 R10", () => {
     // Covers: R10
     it("removes defaultMode when it's exactly 'auto'", () => {
-      runInit({ installEngram: false, setAutoMode: true });
+      runInit({ installEngram: false, setAutoMode: true, installGraphify: false });
       const settingsPath = join(claudeDir, "settings.json");
       expect(
         (JSON.parse(readFileSync(settingsPath, "utf-8")) as { permissions: { defaultMode: string } }).permissions
@@ -412,7 +449,7 @@ describe("runRemove", () => {
 
     // Covers: R10
     it("never touches a foreign (non-'auto') defaultMode value", () => {
-      runInit({ installEngram: false, setAutoMode: false });
+      runInit({ installEngram: false, setAutoMode: false, installGraphify: false });
       const settingsPath = join(claudeDir, "settings.json");
       const settings = JSON.parse(readFileSync(settingsPath, "utf-8")) as Record<string, unknown>;
       settings.permissions = { defaultMode: "plan" };
@@ -429,7 +466,7 @@ describe("runRemove", () => {
 
     // Covers: R10
     it("leaves settings.json.enabledPlugins fully untouched — argos remove never uninstalls/disables Engram", () => {
-      runInit({ installEngram: false, setAutoMode: true });
+      runInit({ installEngram: false, setAutoMode: true, installGraphify: false });
       const settingsPath = join(claudeDir, "settings.json");
       const settings = JSON.parse(readFileSync(settingsPath, "utf-8")) as Record<string, unknown>;
       settings.enabledPlugins = { "engram@engram": true };
@@ -444,7 +481,7 @@ describe("runRemove", () => {
 
     // Covers: R10
     it("preview mode reports would-remove and writes nothing", () => {
-      runInit({ installEngram: false, setAutoMode: true });
+      runInit({ installEngram: false, setAutoMode: true, installGraphify: false });
       const settingsPath = join(claudeDir, "settings.json");
       const before = readFileSync(settingsPath, "utf-8");
 
@@ -480,12 +517,12 @@ describe("runRemoveInteractive", () => {
   });
 
   it("--yes / no-TTY is byte-identical to calling runRemove directly, even with a prompter injected", async () => {
-    runInit({ installEngram: false, setAutoMode: false });
+    runInit({ installEngram: false, setAutoMode: false, installGraphify: false });
     const prompter = makeFakePrompter([]); // never consulted
 
     const viaInteractive = await runRemoveInteractive({ apply: true, yes: true, prompter });
 
-    runInit({ installEngram: false, setAutoMode: false }); // reset state for a fair second comparison run
+    runInit({ installEngram: false, setAutoMode: false, installGraphify: false }); // reset state for a fair second comparison run
     const viaDirect = runRemove({ apply: true });
 
     expect(viaInteractive.exitCode).toBe(viaDirect.exitCode);
@@ -493,7 +530,7 @@ describe("runRemoveInteractive", () => {
   });
 
   it("a plain preview (apply unset/false) never consults the prompter, even under a real TTY", async () => {
-    runInit({ installEngram: false, setAutoMode: false });
+    runInit({ installEngram: false, setAutoMode: false, installGraphify: false });
     let calls = 0;
     const prompter: Prompter = {
       ...makeFakePrompter([]),
@@ -528,7 +565,7 @@ describe("runRemoveInteractive", () => {
     });
 
     it("a wrong typed confirmation aborts --apply with zero writes", async () => {
-      runInit({ installEngram: false, setAutoMode: false });
+      runInit({ installEngram: false, setAutoMode: false, installGraphify: false });
       const before = snapshot(claudeDir);
       const prompter = makeFakePrompter(["not-the-right-directory"]);
 
@@ -540,7 +577,7 @@ describe("runRemoveInteractive", () => {
     });
 
     it("the correct typed confirmation proceeds with --apply", async () => {
-      runInit({ installEngram: false, setAutoMode: false });
+      runInit({ installEngram: false, setAutoMode: false, installGraphify: false });
       const prompter = makeFakePrompter([claudeDir]);
 
       const report = await runRemoveInteractive({ apply: true, prompter });
@@ -551,7 +588,7 @@ describe("runRemoveInteractive", () => {
     });
 
     it("--purge requires a SECOND confirmation on top of the typed directory name", async () => {
-      runInit({ installEngram: false, setAutoMode: false });
+      runInit({ installEngram: false, setAutoMode: false, installGraphify: false });
       const prompter = makeFakePrompter([claudeDir, false]); // directory confirmed, purge declined
 
       const report = await runRemoveInteractive({ apply: true, purge: true, prompter });
@@ -563,7 +600,7 @@ describe("runRemoveInteractive", () => {
     });
 
     it("confirming both the directory name and the purge warning proceeds with --apply --purge", async () => {
-      runInit({ installEngram: false, setAutoMode: false });
+      runInit({ installEngram: false, setAutoMode: false, installGraphify: false });
       const prompter = makeFakePrompter([claudeDir, true]);
 
       const report = await runRemoveInteractive({ apply: true, purge: true, prompter });
