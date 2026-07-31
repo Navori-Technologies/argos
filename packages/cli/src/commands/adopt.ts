@@ -23,11 +23,18 @@ import {
 import { createBackup } from "../lib/backup.js";
 import { buildFichaContent, FICHA_BLOCK_ID } from "../lib/ficha.js";
 import { checkGitRepo, getRemoteOriginUrl, parseIdentityFromRemote } from "../lib/git.js";
+import {
+  hasGraphifyProjectHook,
+  installGraphifyProjectScope,
+  manualGraphifyCommands,
+  type GraphifyRunner,
+} from "../lib/graphify-plugin.js";
 import { injectBlock, listBlocks } from "../lib/markers.js";
 import type { FileStatus } from "../lib/managed-files.js";
 import { readNaviorConfig } from "../lib/navori-import.js";
 import { isInteractive, clackPrompter, type Prompter } from "../lib/prompter.js";
 import { readCliVersion } from "../lib/version.js";
+import { hasBinary as hasBinaryReal } from "../lib/which.js";
 import { linkRepo, loadRegistry, resolveWorkspaceForRepo } from "../lib/workspaces.js";
 
 /** Written when no lint/typecheck/test script exists to build a real gate from. */
@@ -60,6 +67,35 @@ export interface AdoptOptions {
    * value, reported with row `source: "edited"`.
    */
   overrides?: AdoptOverrides;
+  /**
+   * Install the Graphify project-scope hook (`graphify install --project` +
+   * `graphify hook install`) in `cwd` when the PreToolUse hook isn't already
+   * registered in `<cwd>/.claude/settings.json` (spec 0006 R9–R13). Default
+   * `true`; the wizard's "instalar el hook de Graphify sí/no" step (default
+   * sí, R13) passes `false` when the operator declines — the whole step is
+   * then skipped entirely (no row, no process spawned). Delegates entirely
+   * to `installGraphifyProjectScope` (lib/graphify-plugin.ts), which never
+   * writes `.claude/settings.json` or the repo's CLAUDE.md itself — those
+   * writes are always `graphify install --project`/`graphify hook
+   * install`'s own job.
+   */
+  installGraphify?: boolean;
+  /**
+   * Injectable for tests; defaults to `runGraphifyCli` (see
+   * lib/graphify-plugin.ts). Never used outside tests — the real `argos
+   * adopt` CLI always goes through the real `spawnSync`-backed runner.
+   */
+  graphifyRunner?: GraphifyRunner;
+  /**
+   * Injectable for tests; defaults to the real `hasBinary` from `which.ts`.
+   * Checked here (not inside `installGraphifyProjectScope`, which has no
+   * PATH awareness of its own) to distinguish R11 (binary absent → warning,
+   * no exit 1) from R12 (a command spawned but failed → error, exit 1) —
+   * R10 (hook already present) is still checked first, via
+   * `hasGraphifyProjectHook`, so its precedence over R11 holds regardless of
+   * what `graphifyHasBinary` reports.
+   */
+  graphifyHasBinary?: (name: string) => boolean;
 }
 
 /**
@@ -356,6 +392,32 @@ export function runAdopt(options: AdoptOptions): AdoptReport {
     rows.push({ field: "ficha (./CLAUDE.md)", value: errorMessage(err), source: "error" });
   }
 
+  // Graphify project-scope hook (spec 0006 R9–R13): last step, after config +
+  // ficha, so a graphify failure never blocks the core adopt work. R10
+  // (hook already in `<cwd>/.claude/settings.json`) is checked first and
+  // takes precedence over R11 (binary absent) — a hook already committed to
+  // the repo counts as installed even on a machine without `graphify` in
+  // PATH.
+  if (options.installGraphify ?? true) {
+    const hasBinary = options.graphifyHasBinary ?? hasBinaryReal;
+    if (hasGraphifyProjectHook(cwd)) {
+      rows.push({ field: "graphify", value: "ya instalado", source: "detected" });
+    } else if (!hasBinary("graphify")) {
+      rows.push({
+        field: "graphify",
+        value: `binario 'graphify' no está en PATH — corre manualmente: ${manualGraphifyCommands().join(" && ")}`,
+        source: "warning",
+      });
+    } else {
+      const result = installGraphifyProjectScope(cwd, { runner: options.graphifyRunner });
+      if (result.status === "error") {
+        rows.push({ field: "graphify", value: result.detail ?? "graphify install --project falló", source: "error" });
+      } else {
+        rows.push({ field: "graphify", value: result.detail ?? "hook PreToolUse instalado", source: "detected" });
+      }
+    }
+  }
+
   const exitCode: 0 | 1 = rows.some((r) => r.source === "error") ? 1 : 0;
   return { rows, configPath, fichaStatus, backupPath, exitCode };
 }
@@ -540,6 +602,19 @@ export async function runAdoptInteractive(options: AdoptInteractiveOptions): Pro
     return cancelledAdoptReport();
   }
 
+  // Graphify project-scope hook (spec 0006 R13): declining skips the whole
+  // step in `runAdopt` (no row, no process spawned) — see
+  // `AdoptOptions.installGraphify`.
+  const installGraphify = await prompter.confirm({
+    message:
+      "¿Instalar el hook PreToolUse de Graphify (Graphify-Labs/graphify) y el git hook post-commit de rebuild EN ESTE repo?",
+    initialValue: options.installGraphify ?? true,
+  });
+  if (prompter.isCancel(installGraphify)) {
+    prompter.cancel("argos adopt cancelado — no se tocó nada.");
+    return cancelledAdoptReport();
+  }
+
   prompter.note(
     [
       `nombre: ${name}`,
@@ -560,6 +635,9 @@ export async function runAdoptInteractive(options: AdoptInteractiveOptions): Pro
   const report = runAdopt({
     cwd,
     refresh,
+    installGraphify,
+    graphifyRunner: options.graphifyRunner,
+    graphifyHasBinary: options.graphifyHasBinary,
     overrides: {
       name: name || undefined,
       branchBase: branchBase || undefined,
