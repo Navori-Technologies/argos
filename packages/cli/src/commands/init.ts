@@ -13,6 +13,7 @@ import {
 import { writeFileAtomic } from "../lib/atomic-write.js";
 import { createBackup } from "../lib/backup.js";
 import { installEngramPlugin, type ClaudeCliRunner } from "../lib/engram-plugin.js";
+import { installGraphifyUserScope, type GraphifyRunner } from "../lib/graphify-plugin.js";
 import { injectBlock, listBlocks } from "../lib/markers.js";
 import {
   type FileStatus,
@@ -90,6 +91,30 @@ export interface InitOptions {
    * already-set `defaultMode`, whatever its value (R6).
    */
   setAutoMode?: boolean;
+  /**
+   * Install the Graphify CLI (`graphifyy` on PyPI) user-scope — binary via
+   * `uv`/`pipx` plus `graphify install` (skill + `~/.claude/CLAUDE.md` block)
+   * — when it isn't already installed (spec 0006 R1, R5, R6, R7). Default
+   * `true`; the wizard's "instalar Graphify sí/no" step (default sí, R6)
+   * passes `false` when the operator declines — the whole step is then
+   * skipped entirely (no row, no process spawned). Delegates entirely to
+   * `installGraphifyUserScope` (lib/graphify-plugin.ts), which never writes
+   * `~/.claude/CLAUDE.md`, `settings.json`, or the skill file itself — those
+   * writes are always `graphify install`'s own job.
+   */
+  installGraphify?: boolean;
+  /**
+   * Injectable for tests; defaults to `runGraphifyCli` (see
+   * lib/graphify-plugin.ts). Never used outside tests — the real `argos
+   * init` CLI always goes through the real `spawnSync`-backed runner.
+   */
+  graphifyRunner?: GraphifyRunner;
+  /**
+   * Injectable for tests; defaults to the real `hasBinary` from `which.ts`
+   * (see `installGraphifyUserScope`'s own default). Never used outside
+   * tests — the real `argos init` CLI always resolves PATH for real.
+   */
+  graphifyHasBinary?: (name: string) => boolean;
   /**
    * Whether to take over `settings.json.outputStyle` when it currently
    * points at the predecessor harness's voice (`navori`). Default `true`
@@ -208,6 +233,7 @@ export function runInit(options: InitOptions = {}): InitReport {
   const installHooks = options.installHooks ?? true;
   const installEngram = options.installEngram ?? true;
   const setAutoMode = options.setAutoMode ?? true;
+  const installGraphify = options.installGraphify ?? true;
   const force = options.force ?? false;
   const version = readCliVersion();
   const claudeDir = resolveClaudeDir();
@@ -403,6 +429,24 @@ export function runInit(options: InitOptions = {}): InitReport {
     rows.push({ path: "settings.json#defaultMode", status: defaultModeResult.status, detail: defaultModeResult.detail });
   }
 
+  // 2g. Graphify (spec 0006 "Graphify como parte del motor"): install the
+  // `graphifyy` CLI user-scope (binary via `uv`/`pipx` + `graphify install`)
+  // unless it's already installed. Delegates entirely to
+  // `installGraphifyUserScope` (lib/graphify-plugin.ts), which peeks the
+  // skill/binary itself and never writes `~/.claude/CLAUDE.md`,
+  // `settings.json`, or the skill file directly — a successful install is
+  // `graphify install`'s own write, not ours. Gated by the `installGraphify`
+  // toggle (default true; the wizard's "Graphify sí/no" step — R6): when
+  // declined, this is skipped entirely, no row at all (R6, R7). A `graphify`
+  // error never aborts the rest of `init` (R5) — it's just another row.
+  if (installGraphify) {
+    const result = installGraphifyUserScope(claudeDir, {
+      runner: options.graphifyRunner,
+      hasBinary: options.graphifyHasBinary,
+    });
+    rows.push({ path: "tooling#graphify", status: result.status, detail: result.detail });
+  }
+
   // 3. ~/.argos/global.json
   const argosHome = resolveArgosHome();
   const globalJsonPath = join(argosHome, "global.json");
@@ -585,6 +629,18 @@ export async function runInitInteractive(options: InitInteractiveOptions = {}): 
     return cancelledInitReport();
   }
 
+  // Graphify (spec 0006 R6): declining skips the whole step in `runInit` (no
+  // row, no process spawned) — see `InitOptions.installGraphify`.
+  const installGraphify = await prompter.confirm({
+    message:
+      "¿Instalar Graphify, un CLI de terceros (Graphify-Labs/graphify, paquete PyPI graphifyy, vía uv/pipx) que registra el skill /graphify para consultar el codebase como knowledge graph?",
+    initialValue: options.installGraphify ?? true,
+  });
+  if (prompter.isCancel(installGraphify)) {
+    prompter.cancel("argos init cancelado — no se tocó nada.");
+    return cancelledInitReport();
+  }
+
   const claudeDir = resolveClaudeDir();
 
   // `--force` pre-flight (see `InitOptions.force`'s doc comment): flag-driven,
@@ -634,6 +690,7 @@ export async function runInitInteractive(options: InitInteractiveOptions = {}): 
       "skills: sí (siempre — cargan on-demand)",
       `engram: ${installEngram ? "sí" : "no"}`,
       `auto mode: ${setAutoMode ? "sí" : "no"}`,
+      `graphify: ${installGraphify ? "sí" : "no"}`,
       `destino: ${claudeDir}`,
       "se hace un backup antes de escribir nada",
     ].join("\n"),
@@ -652,9 +709,12 @@ export async function runInitInteractive(options: InitInteractiveOptions = {}): 
     installHooks,
     installEngram,
     setAutoMode,
+    installGraphify,
     takeoverNavoriVoice,
     force,
     engramRunner: options.engramRunner,
+    graphifyRunner: options.graphifyRunner,
+    graphifyHasBinary: options.graphifyHasBinary,
   });
   prompter.outro(report.summary);
   return report;

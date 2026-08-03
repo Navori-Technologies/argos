@@ -14,12 +14,14 @@ import { buildFichaContent, FICHA_BLOCK_ID } from "../lib/ficha.js";
 import { getRemoteOriginUrl, isGitRepo, parseIdentityFromRemote } from "../lib/git.js";
 import { listAgentIds, listSkillIds, MANAGED_BLOCK_IDS, resolveAssetsDir } from "../lib/assets.js";
 import { isEngramPluginEnabled } from "../lib/engram-plugin.js";
+import { isGraphifySkillRegistered } from "../lib/graphify-plugin.js";
 import { listBlocks, listDanglingBlockIds } from "../lib/markers.js";
 import { hasArgosFileMarker, hasArgosShellFileMarker } from "../lib/managed-files.js";
 import { hasNaviorConfig } from "../lib/navori-import.js";
 import { resolveClaudeDir } from "../lib/paths.js";
 import { isArgosHookCommand } from "../lib/settings-merge.js";
 import { readCliVersion } from "../lib/version.js";
+import { hasBinary } from "../lib/which.js";
 import { loadRegistry, resolveWorkspaceForRepo } from "../lib/workspaces.js";
 import { describeZodError } from "../lib/zod-messages.js";
 import { NO_GATE_PLACEHOLDER } from "./adopt.js";
@@ -259,6 +261,30 @@ function checkEngramPlugin(findings: DoctorFinding[], claudeDir: string): void {
 }
 
 /**
+ * Graphify (spec 0006 R8): warns when the `graphify` binary isn't in PATH and
+ * warns (independently) when the skill isn't registered
+ * (`<claudeDir>/skills/graphify/SKILL.md` absent). Read-only, never spawns —
+ * reuses `hasBinary` (lib/which.ts) and `isGraphifySkillRegistered`
+ * (lib/graphify-plugin.ts) so "installed" never diverges between `init` and
+ * `doctor` (same philosophy as `checkEngramPlugin` above).
+ */
+function checkGraphify(findings: DoctorFinding[], claudeDir: string): void {
+  if (!hasBinary("graphify")) {
+    findings.push({
+      level: "warning",
+      message:
+        "El binario graphify no está en PATH. Instalalo con `uv tool install graphifyy` (o `pipx install graphifyy`) y corre argos init.",
+    });
+  }
+  if (!isGraphifySkillRegistered(claudeDir)) {
+    findings.push({
+      level: "warning",
+      message: "El skill graphify no está registrado. Corre argos init.",
+    });
+  }
+}
+
+/**
  * Auto mode (spec 0005 R8): warns when `permissions.defaultMode` is absent.
  * Read-only, guarded against a missing/corrupt settings.json (never throws).
  * Never opines on a `defaultMode` that IS present but not `"auto"` — that's
@@ -400,6 +426,7 @@ function checkMotor(findings: DoctorFinding[]): void {
   checkHookSettings(findings, claudeDir);
   checkOutputStyleVoice(findings, claudeDir);
   checkEngramPlugin(findings, claudeDir);
+  checkGraphify(findings, claudeDir);
   checkAutoMode(findings, claudeDir);
   checkWorkspaceRegistryHealth(findings);
 }
