@@ -1,6 +1,6 @@
 {
   "name": "argos-harness",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "type": "module",
   "description": "Argos — global-first CLI harness for setting up and managing Claude Code across your projects",
   "license": "MIT",
