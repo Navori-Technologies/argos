@@ -516,6 +516,7 @@ export interface WorkspaceGraphCommandOptions {
   out?: string;
   noUpdate?: boolean;
   dryRun?: boolean;
+  viz?: boolean;
   /** Injectable for tests; forwarded to `runWorkspaceGraph`. */
   runner?: WorkspaceGraphRunner;
   /** Injectable for tests; forwarded to `runWorkspaceGraph`. */
@@ -563,6 +564,12 @@ const graphSubCommand = defineCommand({
       default: false,
       description: "Imprime el plan y no ejecuta nada.",
     },
+    viz: {
+      type: "boolean",
+      default: true,
+      description:
+        "Genera <out>/bridge-graph.html, visualización autocontenida del subgrafo puente cross-repo (--no-viz para saltarlo).",
+    },
   },
   run({ args }) {
     const name = (args.name as string | undefined)?.trim() || undefined;
@@ -573,6 +580,7 @@ const graphSubCommand = defineCommand({
       out,
       noUpdate: !(args.update as boolean),
       dryRun: Boolean(args.dryRun),
+      viz: Boolean(args.viz),
     });
 
     if (report.error) {
@@ -593,6 +601,11 @@ const graphSubCommand = defineCommand({
       console.log(pc.yellow(`⚠ ${report.bridgeWarning}`));
     } else if (report.bridgeReportPath) {
       console.log(`${pc.green("✓")} bridge-report -> ${report.bridgeReportPath}`);
+    }
+    if (report.bridgeVizPath) {
+      console.log(`${pc.green("✓")} bridge-graph -> ${report.bridgeVizPath}`);
+    } else if (report.bridgeVizWarning) {
+      console.log(pc.yellow(`⚠ ${report.bridgeVizWarning}`));
     }
 
     process.exit(report.exitCode);

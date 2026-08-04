@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -312,6 +312,84 @@ describe("runWorkspaceGraph", () => {
       out: customOut,
     });
     expect(report.outDir).toBe(customOut);
+  });
+
+  describe("bridge-graph.html (viz)", () => {
+    // Mimics graphify merge-graphs actually writing a merged-graph.json (the
+    // real runner shells out; here the injected runner does it directly so
+    // the viz step downstream has something real to read).
+    function runnerWritingMergedGraph(): WorkspaceGraphRunner {
+      return (_binary, args) => {
+        const outIdx = args.indexOf("--out");
+        if (outIdx !== -1) {
+          const mergedGraphPath = args[outIdx + 1] as string;
+          writeFileSync(
+            mergedGraphPath,
+            JSON.stringify({
+              nodes: [
+                { id: "repo-a::foo", repo: "repo-a", label: "foo()" },
+                { id: "repo-b::bar", repo: "repo-b", label: "bar()" },
+              ],
+              links: [
+                { source: "repo-a::foo", target: "repo-b::bar", relation: "http_call", _origin: "bridge" },
+              ],
+            }),
+            "utf-8",
+          );
+        }
+        return ok();
+      };
+    }
+
+    it("writes bridge-graph.html on the happy path", () => {
+      makeGraphRepo(join(root, "repo-a"));
+      makeGraphRepo(join(root, "repo-b"));
+      const report = runWorkspaceGraph({
+        cwd: root,
+        name: "bonum",
+        registry: registryFor(root),
+        hasBinary: () => true,
+        runner: runnerWritingMergedGraph(),
+      });
+      expect(report.exitCode).toBe(0);
+      expect(report.bridgeVizPath).toBe(join(report.outDir as string, "bridge-graph.html"));
+      expect(existsSync(report.bridgeVizPath as string)).toBe(true);
+      const html = readFileSync(report.bridgeVizPath as string, "utf-8");
+      expect(html).toContain("repo-a::foo");
+      expect(html).toContain("bonum — bridge graph");
+    });
+
+    it("--no-viz (viz: false) skips generating bridge-graph.html", () => {
+      makeGraphRepo(join(root, "repo-a"));
+      makeGraphRepo(join(root, "repo-b"));
+      const report = runWorkspaceGraph({
+        cwd: root,
+        name: "bonum",
+        registry: registryFor(root),
+        hasBinary: () => true,
+        runner: runnerWritingMergedGraph(),
+        viz: false,
+      });
+      expect(report.exitCode).toBe(0);
+      expect(report.bridgeVizPath).toBeUndefined();
+      expect(existsSync(join(report.outDir as string, "bridge-graph.html"))).toBe(false);
+    });
+
+    it("dry-run never generates bridge-graph.html", () => {
+      makeGraphRepo(join(root, "repo-a"));
+      makeGraphRepo(join(root, "repo-b"));
+      const runner = vi.fn<WorkspaceGraphRunner>();
+      const report = runWorkspaceGraph({
+        cwd: root,
+        name: "bonum",
+        registry: registryFor(root),
+        dryRun: true,
+        runner,
+      });
+      expect(report.dryRun).toBe(true);
+      expect(report.bridgeVizPath).toBeUndefined();
+      expect(runner).not.toHaveBeenCalled();
+    });
   });
 });
 
