@@ -1,0 +1,93 @@
+---
+import Icon from './Icon.astro';
+
+/**
+ * Card de feature con arquitectura Double-Bezel: shell exterior con hairline +
+ * core interior con radio concéntrico calc(). Acento por token (http/constant/brand).
+ */
+interface Props {
+  icon: 'compass' | 'network' | 'shield' | 'graph' | 'brain' | 'terminal';
+  title: string;
+  summary: string;
+  command?: string;
+  accent: 'http' | 'constant' | 'brand';
+  featured?: boolean;
+  spanClass?: string;
+  delay?: number;
+}
+
+const {
+  icon,
+  title,
+  summary,
+  command,
+  accent,
+  featured = false,
+  spanClass = '',
+  delay = 0,
+} = Astro.props;
+
+const accentVar = {
+  http: 'var(--color-http)',
+  constant: 'var(--color-constant)',
+  brand: 'var(--color-brand)',
+}[accent];
+
+const accentText = {
+  http: 'text-http',
+  constant: 'text-constant',
+  brand: 'text-brand',
+}[accent];
+---
+
+<article
+  data-reveal
+  style={`--reveal-delay: ${delay}ms; --accent: ${accentVar}`}
+  class:list={['bezel-card group rounded-[2rem] border border-white/[0.08] bg-white/[0.02] p-2', spanClass]}
+>
+  <div
+    class:list={[
+      'bezel-core relative flex h-full flex-col overflow-hidden rounded-[calc(2rem-0.5rem)] bg-ink-950 shadow-[inset_0_1px_1px_rgba(255,255,255,0.06)]',
+      featured ? 'p-8 md:p-10' : 'p-7',
+    ]}
+  >
+    <!-- Glow de acento en la esquina -->
+    <div
+      aria-hidden="true"
+      class="pointer-events-none absolute -right-16 -top-16 h-40 w-40 rounded-full opacity-40 blur-3xl transition-opacity duration-500 [transition-timing-function:var(--ease-out-strong)] group-hover:opacity-70"
+      style={`background: ${accentVar}`}
+    >
+    </div>
+
+    <div class="relative flex items-start justify-between">
+      <span
+        class:list={['grid place-items-center rounded-2xl border border-white/10 bg-white/[0.04]', featured ? 'h-14 w-14' : 'h-12 w-12', accentText]}
+      >
+        <Icon name={icon} class={featured ? 'h-7 w-7' : 'h-6 w-6'} />
+      </span>
+      {
+        featured && (
+          <span class="rounded-full border border-brand/30 bg-brand/10 px-3 py-1 text-[10px] font-medium uppercase tracking-[0.18em] text-brand">
+            Nuevo · spec 0007
+          </span>
+        )
+      }
+    </div>
+
+    <h3 class:list={['relative mt-6 font-display font-semibold tracking-tight text-white', featured ? 'text-2xl md:text-3xl' : 'text-xl']}>
+      {title}
+    </h3>
+    <p class:list={['relative mt-3 flex-1 leading-relaxed text-mist-300', featured ? 'text-base md:text-lg' : 'text-sm']}>
+      {summary}
+    </p>
+
+    {
+      command && (
+        <code class="relative mt-6 flex w-max max-w-full items-center gap-2 overflow-hidden rounded-full border border-white/[0.06] bg-black/40 px-4 py-2 font-mono text-xs text-mist-200">
+          <span class={`${accentText} select-none`}>$</span>
+          <span class="truncate">{command}</span>
+        </code>
+      )
+    }
+  </div>
+</article>

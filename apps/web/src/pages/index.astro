@@ -1,0 +1,48 @@
+---
+import Base from '../layouts/Base.astro';
+import Nav from '../components/Nav.astro';
+import Hero from '../components/Hero.astro';
+import WhatIs from '../components/WhatIs.astro';
+import Features from '../components/Features.astro';
+import HowItWorks from '../components/HowItWorks.astro';
+import Terminal from '../components/Terminal.astro';
+import Footer from '../components/Footer.astro';
+import ScrollReveal from '../components/ScrollReveal.astro';
+---
+
+<Base>
+  <!-- Grano de película fijo para textura física sutil -->
+  <div class="grain-overlay" aria-hidden="true"></div>
+
+  <Nav />
+
+  <main id="contenido">
+    <Hero />
+    <WhatIs />
+    <Features />
+    <HowItWorks />
+
+    <!-- Terminal animado -->
+    <section id="terminal" class="relative mx-auto max-w-6xl px-6 py-28 md:py-40">
+      <div class="pointer-events-none absolute left-1/2 top-1/2 -z-10 h-96 w-96 -translate-x-1/2 -translate-y-1/2 rounded-full bg-brand/[0.06] blur-[130px]"></div>
+      <div class="mx-auto mb-14 max-w-2xl text-center">
+        <p data-reveal class="mb-5 inline-block rounded-full border border-white/10 bg-white/[0.03] px-3 py-1 text-[10px] font-medium uppercase tracking-[0.2em] text-brand">
+          En acción
+        </p>
+        <h2 data-reveal style="--reveal-delay: 60ms" class="text-balance text-4xl font-semibold tracking-tight text-white sm:text-5xl">
+          Un grafo cross-repo, un comando
+        </h2>
+        <p data-reveal style="--reveal-delay: 120ms" class="mt-5 text-lg text-mist-300">
+          <code class="rounded bg-white/5 px-1.5 py-0.5 font-mono text-sm text-brand">argos workspace graph</code> fusiona los grafos de cada repo y tiende puentes entre contratos reales.
+        </p>
+      </div>
+      <div data-reveal style="--reveal-delay: 160ms">
+        <Terminal />
+      </div>
+    </section>
+  </main>
+
+  <Footer />
+
+  <ScrollReveal />
+</Base>

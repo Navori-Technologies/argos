@@ -1,0 +1,55 @@
+---
+import Icon from './Icon.astro';
+
+/**
+ * Nav "fluid island": pill flotante desprendido del borde superior
+ * (mt / mx-auto / w-max / rounded-full), glass con backdrop-blur (fixed,
+ * cumple la regla de perf: blur solo en fixed/sticky). Cero JS.
+ */
+const links = [
+  { href: '#que-es', label: 'Qué es' },
+  { href: '#features', label: 'Piezas' },
+  { href: '#empezar', label: 'Empezar' },
+];
+---
+
+<div class="fixed inset-x-0 top-0 z-40 flex justify-center px-4 pt-5">
+  <nav
+    aria-label="Principal"
+    class="flex w-max items-center gap-1 rounded-full border border-white/10 bg-white/[0.04] p-1.5 pl-4 shadow-[0_8px_40px_-12px_rgba(0,0,0,0.8)] backdrop-blur-xl"
+  >
+    <a href="#top" class="mr-1 flex items-center gap-2 pr-2 font-display text-sm font-semibold tracking-tight text-white">
+      <span class="grid h-6 w-6 place-items-center rounded-full bg-brand/15 text-brand">
+        <Icon name="eye" class="h-3.5 w-3.5" />
+      </span>
+      argos
+    </a>
+
+    <ul class="hidden items-center gap-0.5 sm:flex">
+      {
+        links.map((l) => (
+          <li>
+            <a
+              href={l.href}
+              class="rounded-full px-3.5 py-2 text-sm text-mist-300 transition-colors duration-200 [transition-timing-function:var(--ease-out-strong)] hover:text-white"
+            >
+              {l.label}
+            </a>
+          </li>
+        ))
+      }
+    </ul>
+
+    <a
+      href="https://www.npmjs.com/package/argos-harness"
+      class="group ml-1 flex items-center gap-2 rounded-full bg-brand py-2 pl-4 pr-2 text-sm font-semibold text-ink-950 transition-transform duration-200 [transition-timing-function:var(--ease-out-strong)] active:scale-[0.97]"
+    >
+      Instalar
+      <span
+        class="grid h-6 w-6 place-items-center rounded-full bg-ink-950/15 transition-transform duration-300 [transition-timing-function:var(--ease-out-strong)] group-hover:translate-x-0.5 group-hover:-translate-y-px"
+      >
+        <Icon name="arrow-up-right" class="h-3.5 w-3.5" />
+      </span>
+    </a>
+  </nav>
+</div>

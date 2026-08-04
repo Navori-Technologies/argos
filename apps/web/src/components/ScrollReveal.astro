@@ -1,0 +1,29 @@
+---
+/**
+ * Isla utilitaria: revela elementos con [data-reveal] al entrar en viewport
+ * usando IntersectionObserver. Con prefers-reduced-motion los muestra de una,
+ * sin animación (el CSS ya fuerza el estado final). Script minúsculo, sin deps.
+ */
+---
+
+<script>
+  const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const targets = document.querySelectorAll<HTMLElement>('[data-reveal]');
+
+  if (reduce || !('IntersectionObserver' in window)) {
+    targets.forEach((el) => el.classList.add('is-revealed'));
+  } else {
+    const io = new IntersectionObserver(
+      (entries, obs) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            entry.target.classList.add('is-revealed');
+            obs.unobserve(entry.target);
+          }
+        }
+      },
+      { threshold: 0.12, rootMargin: '0px 0px -8% 0px' }
+    );
+    targets.forEach((el) => io.observe(el));
+  }
+</script>

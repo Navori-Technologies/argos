@@ -1,0 +1,96 @@
+---
+import Constellation from './Constellation.astro';
+import Icon from './Icon.astro';
+---
+
+<header
+  id="top"
+  class="relative isolate flex min-h-[100dvh] flex-col items-center justify-center overflow-hidden px-6 py-32 text-center"
+>
+  <Constellation />
+
+  <!-- Orbes de mesh radial (vibe Ethereal Glass) -->
+  <div aria-hidden="true" class="pointer-events-none absolute inset-0 -z-10">
+    <div class="absolute left-1/2 top-[38%] h-[46rem] w-[46rem] -translate-x-1/2 -translate-y-1/2 rounded-full bg-brand/10 blur-[130px]"></div>
+    <div class="absolute left-[18%] top-[22%] h-72 w-72 rounded-full bg-http/10 blur-[110px]"></div>
+    <div class="absolute right-[16%] bottom-[18%] h-72 w-72 rounded-full bg-constant/10 blur-[110px]"></div>
+  </div>
+
+  <p
+    data-reveal
+    class="mb-7 inline-flex items-center gap-2.5 rounded-full border border-white/10 bg-white/[0.03] px-4 py-1.5 text-[10px] font-medium uppercase tracking-[0.22em] text-mist-300 backdrop-blur"
+  >
+    <span class="relative flex h-2 w-2">
+      <span class="absolute inline-flex h-full w-full rounded-full bg-brand" style="animation: pulse-ring 2.6s var(--ease-out-expo) infinite"></span>
+      <span class="relative inline-flex h-2 w-2 rounded-full bg-brand"></span>
+    </span>
+    Harness global-first · Claude Code
+  </p>
+
+  <h1
+    data-reveal
+    style="--reveal-delay: 60ms"
+    class="max-w-4xl text-balance text-5xl font-semibold leading-[1.03] tracking-tight text-white sm:text-6xl md:text-[5rem]"
+  >
+    El vigía de <span class="bg-gradient-to-r from-http via-brand to-constant bg-clip-text text-transparent">cien ojos</span> para tus repos
+  </h1>
+
+  <p
+    data-reveal
+    style="--reveal-delay: 140ms"
+    class="mt-8 max-w-2xl text-pretty text-lg leading-relaxed text-mist-300 sm:text-xl"
+  >
+    <span class="font-semibold text-white">argos</span> se instala una vez a nivel usuario y gobierna todos tus repos: agentes orquestados,
+    guardias por hooks y un grafo cross-repo del workspace. Vigilancia total, evidencia antes que inferencia.
+  </p>
+
+  <div data-reveal style="--reveal-delay: 220ms" class="mt-11 flex flex-col items-center gap-4 sm:flex-row">
+    <!-- CTA pill con icono anidado en su propio círculo (button-in-button) -->
+    <a
+      href="#empezar"
+      class="group flex items-center gap-3 rounded-full bg-brand py-2.5 pl-6 pr-2.5 font-semibold text-ink-950 shadow-[0_10px_40px_-12px_var(--color-brand)] transition-transform duration-300 [transition-timing-function:var(--ease-out-strong)] active:scale-[0.97]"
+    >
+      Empieza en 3 pasos
+      <span
+        class="grid h-8 w-8 place-items-center rounded-full bg-ink-950/15 transition-transform duration-300 [transition-timing-function:var(--ease-out-strong)] group-hover:translate-x-1 group-hover:-translate-y-px group-hover:scale-105"
+      >
+        <Icon name="arrow-up-right" class="h-4 w-4" />
+      </span>
+    </a>
+
+    <button
+      type="button"
+      data-copy="npm i -g argos-harness"
+      class="group relative flex items-center gap-3 overflow-hidden rounded-full border border-white/10 bg-white/[0.03] py-2.5 pl-5 pr-4 font-mono text-sm text-mist-200 backdrop-blur transition-transform duration-300 [transition-timing-function:var(--ease-out-strong)] active:scale-[0.98]"
+    >
+      <span class="select-none text-brand/70">$</span>
+      <span>npm i -g argos-harness</span>
+      <span data-copy-label class="ml-1 text-xs text-mist-500 transition-colors duration-200">copiar</span>
+    </button>
+  </div>
+</header>
+
+<script>
+  // Copiar el comando de instalación (micro-interacción, isla mínima).
+  document.querySelectorAll<HTMLButtonElement>('[data-copy]').forEach((btn) => {
+    const label = btn.querySelector<HTMLElement>('[data-copy-label]');
+    btn.addEventListener('click', async () => {
+      const text = btn.dataset.copy;
+      if (!text || !navigator.clipboard) return;
+      try {
+        await navigator.clipboard.writeText(text);
+        if (label) {
+          const prev = label.textContent;
+          label.textContent = 'copiado ✓';
+          label.classList.add('text-brand');
+          setTimeout(() => {
+            label.textContent = prev;
+            label.classList.remove('text-brand');
+          }, 1600);
+        }
+      } catch {
+        /* clipboard no disponible: no-op silencioso */
+      }
+    });
+  });
+</script>

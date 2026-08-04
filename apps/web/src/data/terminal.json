@@ -1,0 +1,12 @@
+[
+  { "id": "l1", "order": 1, "kind": "prompt", "text": "argos workspace graph bonum" },
+  { "id": "l2", "order": 2, "kind": "out", "text": "Leyendo workspace bonum — 4 repos vinculados" },
+  { "id": "l3", "order": 3, "kind": "ok", "text": "grafo graphify fusionado: 1 284 nodos, 3 907 aristas" },
+  { "id": "l4", "order": 4, "kind": "out", "text": "Tendiendo puentes de contratos entre repos…" },
+  { "id": "l5", "order": 5, "kind": "http", "text": "HTTP  web → api   GET /mentoring/:id            resuelto" },
+  { "id": "l6", "order": 6, "kind": "http", "text": "HTTP  web → api   POST /sessions               resuelto" },
+  { "id": "l7", "order": 7, "kind": "constant", "text": "COLA  api → worker  QUEUE_SESSION_REMINDER      resuelto" },
+  { "id": "l8", "order": 8, "kind": "warn", "text": "roto  web → api   GET /mentoring/report        ruta no encontrada" },
+  { "id": "l9", "order": 9, "kind": "ok", "text": "12 contratos resueltos · 1 roto · 0 ambiguos" },
+  { "id": "l10", "order": 10, "kind": "ok", "text": "escrito bridge-graph.html — visualización autocontenida" }
+]

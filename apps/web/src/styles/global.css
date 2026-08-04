@@ -1,0 +1,200 @@
+@import 'tailwindcss';
+
+/* Fuentes self-hosted (cero requests a CDNs en runtime).
+   Display: Space Grotesk (grotesk geométrica ancha).
+   Body:    Plus Jakarta Sans. Mono: JetBrains Mono. */
+@import '@fontsource-variable/space-grotesk';
+@import '@fontsource-variable/plus-jakarta-sans';
+@import '@fontsource-variable/jetbrains-mono';
+
+/*
+  Tokens de diseño de argos — vibe "Ethereal Glass" (OLED SaaS/AI).
+  Fondo casi negro, acentos azul (HTTP) y ámbar (constantes) coherentes con
+  la viz del workspace graph, marca cian para el CTA. Curvas de easing con
+  punch (nada de linear / ease-in-out por default).
+*/
+@theme {
+  --color-void: #050608;
+  --color-ink-950: #070a0f;
+  --color-ink-900: #0a0e14;
+  --color-ink-850: #0e131b;
+  --color-ink-800: #141b26;
+  --color-ink-700: #1c2532;
+
+  --color-mist-500: #6b788c;
+  --color-mist-400: #8b98ab;
+  --color-mist-300: #aeb9c8;
+  --color-mist-200: #d3dbe6;
+
+  --color-http: #9ecbff;
+  --color-http-dim: #5f89bf;
+  --color-constant: #e0b060;
+  --color-constant-dim: #a67f3f;
+
+  --color-brand: #38e2c8;
+  --color-brand-strong: #17c3a8;
+
+  --font-display: 'Space Grotesk Variable', ui-sans-serif, system-ui, sans-serif;
+  --font-sans: 'Plus Jakarta Sans Variable', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono Variable', ui-monospace, monospace;
+
+  /* Curvas con carácter (Emil / Awwwards): sin linear ni ease-in-out planos */
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-out-strong: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+    color-scheme: dark;
+  }
+
+  body {
+    background-color: var(--color-void);
+    color: var(--color-mist-200);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  h1,
+  h2,
+  h3 {
+    font-family: var(--font-display);
+  }
+
+  ::selection {
+    background-color: color-mix(in oklab, var(--color-brand) 35%, transparent);
+    color: #fff;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-brand);
+    outline-offset: 3px;
+    border-radius: 6px;
+  }
+}
+
+/* Grano de película fijo, pointer-events-none, para textura física sutil */
+.grain-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  opacity: 0.035;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* ── Reveal on-scroll: fade-up pesado con blur (activado por ScrollReveal) ── */
+[data-reveal] {
+  opacity: 0;
+  transform: translateY(4rem);
+  filter: blur(12px);
+  transition:
+    opacity 0.9s var(--ease-out-strong),
+    transform 0.9s var(--ease-out-strong),
+    filter 0.9s var(--ease-out-strong);
+  transition-delay: var(--reveal-delay, 0ms);
+  will-change: transform, opacity;
+}
+
+[data-reveal].is-revealed {
+  opacity: 1;
+  transform: none;
+  filter: blur(0);
+}
+
+/* ── Animaciones de identidad (solo transform / opacity) ───────────────── */
+@keyframes float-drift {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-10px);
+  }
+}
+
+@keyframes pulse-ring {
+  0% {
+    transform: scale(0.85);
+    opacity: 0.9;
+  }
+  70% {
+    transform: scale(2.4);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(0.85);
+    opacity: 0;
+  }
+}
+
+@keyframes blink-caret {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes sheen {
+  0% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(220%);
+  }
+}
+
+.animate-float {
+  animation: float-drift 6s var(--ease-out-expo) infinite;
+}
+
+/* Solo hover en punteros finos (evita falsos positivos en touch) */
+@media (hover: hover) and (pointer: fine) {
+  .bezel-card {
+    transition:
+      transform 0.5s var(--ease-out-strong),
+      box-shadow 0.5s var(--ease-out-strong);
+  }
+  .bezel-card:hover {
+    transform: translateY(-4px);
+  }
+  .bezel-card:hover .bezel-core {
+    box-shadow:
+      inset 0 1px 1px rgba(255, 255, 255, 0.14),
+      0 0 0 1px color-mix(in oklab, var(--accent, #38e2c8) 40%, transparent),
+      0 24px 60px -24px color-mix(in oklab, var(--accent, #38e2c8) 55%, transparent);
+  }
+}
+
+/* ── prefers-reduced-motion: menos y más suave, no cero ──────────────── */
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  [data-reveal] {
+    opacity: 1 !important;
+    transform: none !important;
+    filter: none !important;
+    transition: opacity 0.3s ease !important;
+  }
+
+  .animate-float,
+  *[class*='animate-'] {
+    animation: none !important;
+  }
+
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
