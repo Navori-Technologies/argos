@@ -36,6 +36,12 @@ import { readNaviorConfig } from "../lib/navori-import.js";
 import { isInteractive, clackPrompter, type Prompter } from "../lib/prompter.js";
 import { readCliVersion } from "../lib/version.js";
 import { hasBinary as hasBinaryReal } from "../lib/which.js";
+import {
+  discoverGraphRepos,
+  resolveWorkspaceRoot,
+  triggerWorkspaceGraphBackground,
+  type WorkspaceGraphSpawnFn,
+} from "../lib/workspace-graph.js";
 import { linkRepo, loadRegistry, resolveWorkspaceForRepo } from "../lib/workspaces.js";
 
 /** Written when no lint/typecheck/test script exists to build a real gate from. */
@@ -97,6 +103,21 @@ export interface AdoptOptions {
    * what `graphifyHasBinary` reports.
    */
   graphifyHasBinary?: (name: string) => boolean;
+  /**
+   * Trigger a debounced background regeneration of the resolved workspace's
+   * graph (spec 0007) once this adopt succeeds in resolving/linking a
+   * workspace with >=2 repos carrying a `graphify-out/graph.json`. Default
+   * `true`; `--no-workspace-graph` sets it `false` to skip the whole step
+   * (no row, nothing spawned). Delegates to
+   * `triggerWorkspaceGraphBackground` (lib/workspace-graph.ts), which itself
+   * no-ops within the 10-minute debounce window — adopting several repos of
+   * the same workspace back-to-back triggers a single regeneration.
+   */
+  workspaceGraph?: boolean;
+  /** Injectable for tests; forwarded to `triggerWorkspaceGraphBackground`. */
+  workspaceGraphSpawn?: WorkspaceGraphSpawnFn;
+  /** Injectable for tests; forwarded to `triggerWorkspaceGraphBackground` as its clock. */
+  workspaceGraphNow?: () => number;
 }
 
 /**
@@ -341,6 +362,7 @@ export function runAdopt(options: AdoptOptions): AdoptReport {
   // `workspace link` uses and register the repo when it resolves cleanly.
   // Never blocks adopt — an unresolved or ambiguous result is reported as a
   // pending step (info/warning row), not an error.
+  let resolvedWorkspaceName: string | undefined;
   try {
     const registry = loadRegistry();
     const resolution = resolveWorkspaceForRepo(registry, {
@@ -350,6 +372,7 @@ export function runAdopt(options: AdoptOptions): AdoptReport {
     });
     if (resolution.kind === "resolved") {
       const linkResult = linkRepo(resolution.name, { name: finalConfig.name, path: cwd });
+      resolvedWorkspaceName = resolution.name;
       rows.push({
         field: "workspace.link",
         value: `${linkResult.action} en workspace '${resolution.name}'`,
@@ -421,6 +444,34 @@ export function runAdopt(options: AdoptOptions): AdoptReport {
           source: "detected",
         });
       }
+    }
+  }
+
+  // Workspace graph regeneration (spec 0007): last step, after everything
+  // else. Only fires when this adopt resolved into a workspace (via the
+  // block above) whose root has >=2 repos carrying a graphify graph — a
+  // brand-new or single-repo workspace has nothing to merge yet.
+  // `triggerWorkspaceGraphBackground` itself debounces (10 min) and never
+  // throws in the caller's face: a broken registry read here must not fail
+  // adopt's core work, so any error is swallowed silently (best-effort).
+  if ((options.workspaceGraph ?? true) && resolvedWorkspaceName) {
+    try {
+      const rootResolution = resolveWorkspaceRoot(resolvedWorkspaceName, cwd, loadRegistry());
+      if (rootResolution.kind === "resolved" && discoverGraphRepos(rootResolution.root).length >= 2) {
+        const triggered = triggerWorkspaceGraphBackground(rootResolution.root, resolvedWorkspaceName, {
+          spawn: options.workspaceGraphSpawn,
+          now: options.workspaceGraphNow,
+        });
+        if (triggered) {
+          rows.push({
+            field: "workspace.graph",
+            value: `regeneración disparada en background (log en ${join(rootResolution.root, ".argos", "workspace-graph.log")})`,
+            source: "info",
+          });
+        }
+      }
+    } catch {
+      // best-effort — never fails adopt's core work
     }
   }
 
@@ -644,6 +695,9 @@ export async function runAdoptInteractive(options: AdoptInteractiveOptions): Pro
     installGraphify,
     graphifyRunner: options.graphifyRunner,
     graphifyHasBinary: options.graphifyHasBinary,
+    workspaceGraph: options.workspaceGraph,
+    workspaceGraphSpawn: options.workspaceGraphSpawn,
+    workspaceGraphNow: options.workspaceGraphNow,
     overrides: {
       name: name || undefined,
       branchBase: branchBase || undefined,
@@ -672,12 +726,20 @@ export const adoptCommand = defineCommand({
       default: false,
       description: "Fuerza modo no interactivo aunque haya una TTY real (defaults + flags, sin wizard).",
     },
+    workspaceGraph: {
+      type: "boolean",
+      default: true,
+      description:
+        "Dispara la regeneración en background del grafo cross-repo del workspace al terminar " +
+        "(--no-workspace-graph para saltarlo).",
+    },
   },
   async run({ args }) {
     const report = await runAdoptInteractive({
       cwd: process.cwd(),
       refresh: Boolean(args.refresh),
       yes: Boolean(args.yes),
+      workspaceGraph: Boolean(args.workspaceGraph),
     });
 
     if (report.error) {

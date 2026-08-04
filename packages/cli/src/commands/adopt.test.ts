@@ -1,8 +1,8 @@
 import { execFileSync, execSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { dirname, join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readConfig } from "../lib/config.js";
 import type { GraphifyCliResult, GraphifyRunner } from "../lib/graphify-plugin.js";
 import type { Prompter } from "../lib/prompter.js";
@@ -546,6 +546,132 @@ describe("runAdopt — graphify project-scope hook (spec 0006 T4)", () => {
 
     expect(report.exitCode).toBe(0);
     expect(report.rows.some((r) => r.field === "graphify")).toBe(false);
+  });
+});
+
+describe("runAdopt — workspace graph regeneration trigger (spec 0007)", () => {
+  let repoDir: string;
+  let siblingRepoDir: string;
+  let argosHome: string;
+  const originalArgosHome = process.env.ARGOS_HOME;
+
+  beforeEach(() => {
+    // realpath the temp parent up front: `linkRepo` stores repos realpath'd
+    // (macOS /tmp is a symlink to /private/tmp), so the sibling's path saved
+    // directly into the registry here must match that same form or the two
+    // repos would spuriously resolve to different `dirname`s.
+    const parent = realpathSync(mkdtempSync(join(tmpdir(), "argos-adopt-wsg-parent-")));
+    repoDir = join(parent, "repo-a");
+    siblingRepoDir = join(parent, "repo-b");
+    mkdirSync(repoDir, { recursive: true });
+    mkdirSync(join(siblingRepoDir, "graphify-out"), { recursive: true });
+    writeFileSync(join(siblingRepoDir, "graphify-out", "graph.json"), "{}", "utf-8");
+    argosHome = mkdtempSync(join(tmpdir(), "argos-adopt-wsg-home-"));
+    process.env.ARGOS_HOME = argosHome;
+    initGitRepo(repoDir, "git@github.com:bonum/repo-a.git");
+  });
+
+  afterEach(() => {
+    rmSync(repoDir, { recursive: true, force: true });
+    rmSync(siblingRepoDir, { recursive: true, force: true });
+    rmSync(argosHome, { recursive: true, force: true });
+    if (originalArgosHome === undefined) delete process.env.ARGOS_HOME;
+    else process.env.ARGOS_HOME = originalArgosHome;
+  });
+
+  function registerWorkspaceWithSibling(): void {
+    saveRegistry({
+      bonum: {
+        match: { remotes: ["github.com-bonum"], paths: [] },
+        repos: [{ name: "repo-b", path: siblingRepoDir }],
+      },
+    });
+  }
+
+  /** Gives `repoDir` its own graphify graph too, so the parent dir has >=2 discoverable graph repos. */
+  function giveRepoDirAGraph(): void {
+    mkdirSync(join(repoDir, "graphify-out"), { recursive: true });
+    writeFileSync(join(repoDir, "graphify-out", "graph.json"), "{}", "utf-8");
+  }
+
+  it("fires the background trigger once the repo links into a workspace with >=2 graph repos", () => {
+    registerWorkspaceWithSibling();
+    giveRepoDirAGraph();
+    const spawn = vi.fn();
+
+    const report = runAdopt({
+      cwd: repoDir,
+      graphifyHasBinary: () => false,
+      workspaceGraphSpawn: spawn,
+      workspaceGraphNow: () => 0,
+    });
+
+    expect(report.exitCode).toBe(0);
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(spawn).toHaveBeenCalledWith(dirname(repoDir), "bonum");
+    const row = report.rows.find((r) => r.field === "workspace.graph");
+    expect(row?.value).toContain("workspace-graph.log");
+  });
+
+  it("does not fire when the workspace only has 1 repo with a graph", () => {
+    saveRegistry({ bonum: { match: { remotes: ["github.com-bonum"], paths: [] }, repos: [] } });
+    const spawn = vi.fn();
+
+    const report = runAdopt({
+      cwd: repoDir,
+      graphifyHasBinary: () => false,
+      workspaceGraphSpawn: spawn,
+      workspaceGraphNow: () => 0,
+    });
+
+    expect(report.exitCode).toBe(0);
+    expect(spawn).not.toHaveBeenCalled();
+    expect(report.rows.some((r) => r.field === "workspace.graph")).toBe(false);
+  });
+
+  it("--no-workspace-graph (workspaceGraph: false) skips the whole step", () => {
+    registerWorkspaceWithSibling();
+    giveRepoDirAGraph();
+    const spawn = vi.fn();
+
+    const report = runAdopt({
+      cwd: repoDir,
+      graphifyHasBinary: () => false,
+      workspaceGraph: false,
+      workspaceGraphSpawn: spawn,
+      workspaceGraphNow: () => 0,
+    });
+
+    expect(report.exitCode).toBe(0);
+    expect(spawn).not.toHaveBeenCalled();
+    expect(report.rows.some((r) => r.field === "workspace.graph")).toBe(false);
+  });
+
+  it("debounces: adopting a second repo of the same workspace right after does not re-trigger", () => {
+    registerWorkspaceWithSibling();
+    giveRepoDirAGraph();
+    const spawn = vi.fn();
+    let clock = 0;
+    const now = () => clock;
+
+    runAdopt({ cwd: repoDir, graphifyHasBinary: () => false, workspaceGraphSpawn: spawn, workspaceGraphNow: now });
+    expect(spawn).toHaveBeenCalledTimes(1);
+
+    // A second repo of the workspace adopts moments later — same root, debounced.
+    const repoCDir = join(dirname(repoDir), "repo-c");
+    mkdirSync(repoCDir, { recursive: true });
+    initGitRepo(repoCDir, "git@github.com:bonum/repo-c.git");
+    clock += 60_000;
+    const secondReport = runAdopt({
+      cwd: repoCDir,
+      graphifyHasBinary: () => false,
+      workspaceGraphSpawn: spawn,
+      workspaceGraphNow: now,
+    });
+
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(secondReport.rows.some((r) => r.field === "workspace.graph")).toBe(false);
+    rmSync(repoCDir, { recursive: true, force: true });
   });
 });
 

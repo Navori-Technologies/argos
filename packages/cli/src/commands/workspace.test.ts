@@ -1,12 +1,19 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writeConfig } from "../lib/config.js";
 import type { Prompter } from "../lib/prompter.js";
+import type { WorkspaceGraphRunner } from "../lib/workspace-graph.js";
 import { loadRegistry, saveRegistry, type WorkspaceRegistry } from "../lib/workspaces.js";
-import { runWorkspaceAgents, runWorkspaceLink, runWorkspaceLinkInteractive, runWorkspaceShow } from "./workspace.js";
+import {
+  runWorkspaceAgents,
+  runWorkspaceGraphCommand,
+  runWorkspaceLink,
+  runWorkspaceLinkInteractive,
+  runWorkspaceShow,
+} from "./workspace.js";
 
 const CANCEL = Symbol("cancel");
 
@@ -380,6 +387,76 @@ describe("commands/workspace", () => {
         { name: "webapp", status: "error", detail: "boom" },
         { name: "api", status: "created", detail: "" },
       ]);
+    });
+  });
+
+  describe("runWorkspaceGraphCommand", () => {
+    function makeGraphRepo(dir: string): void {
+      mkdirSync(join(dir, "graphify-out"), { recursive: true });
+      writeFileSync(join(dir, "graphify-out", "graph.json"), "{}", "utf-8");
+    }
+
+    it("errors when the registry is corrupt", () => {
+      writeFileSync(join(argosHome, "workspaces.json"), "{ not json", "utf-8");
+      const report = runWorkspaceGraphCommand({ cwd: repoDir, name: "bonum" });
+      expect(report.exitCode).toBe(1);
+      expect(report.error).toMatch(/corrupto/);
+    });
+
+    it("resolves via the real registry and runs the pipeline end to end", () => {
+      const parent = mkdtempSync(join(tmpdir(), "argos-ws-graph-parent-"));
+      const repoADir = join(parent, "repo-a");
+      const repoBDir = join(parent, "repo-b");
+      makeGraphRepo(repoADir);
+      makeGraphRepo(repoBDir);
+      const registry: WorkspaceRegistry = {
+        bonum: {
+          match: { remotes: [], paths: [] },
+          repos: [
+            { name: "repo-a", path: repoADir },
+            { name: "repo-b", path: repoBDir },
+          ],
+        },
+      };
+      saveRegistry(registry);
+
+      const runner: WorkspaceGraphRunner = () => ({ status: 0, stdout: "", stderr: "" });
+      const report = runWorkspaceGraphCommand({
+        cwd: repoDir,
+        name: "bonum",
+        hasBinary: () => true,
+        runner,
+      });
+
+      expect(report.exitCode).toBe(0);
+      expect(report.root).toBe(parent);
+      expect(report.mergedGraphPath).toContain("merged-graph.json");
+      rmSync(parent, { recursive: true, force: true });
+    });
+
+    it("dry-run never spawns and reports the plan", () => {
+      const parent = mkdtempSync(join(tmpdir(), "argos-ws-graph-dryrun-"));
+      const repoADir = join(parent, "repo-a");
+      const repoBDir = join(parent, "repo-b");
+      makeGraphRepo(repoADir);
+      makeGraphRepo(repoBDir);
+      saveRegistry({
+        bonum: {
+          match: { remotes: [], paths: [] },
+          repos: [
+            { name: "repo-a", path: repoADir },
+            { name: "repo-b", path: repoBDir },
+          ],
+        },
+      });
+
+      const runner = vi.fn<WorkspaceGraphRunner>();
+      const report = runWorkspaceGraphCommand({ cwd: repoDir, name: "bonum", dryRun: true, runner });
+
+      expect(report.exitCode).toBe(0);
+      expect(report.dryRun).toBe(true);
+      expect(runner).not.toHaveBeenCalled();
+      rmSync(parent, { recursive: true, force: true });
     });
   });
 });

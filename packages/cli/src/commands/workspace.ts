@@ -21,6 +21,7 @@ import {
   type LinkAction,
 } from "../lib/workspaces.js";
 import { hasBinary as hasBinaryDefault } from "../lib/which.js";
+import { runWorkspaceGraph, type WorkspaceGraphReport, type WorkspaceGraphRunner } from "../lib/workspace-graph.js";
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -507,14 +508,106 @@ const agentsSubCommand = defineCommand({
   },
 });
 
+// --- graph -------------------------------------------------------------
+
+export interface WorkspaceGraphCommandOptions {
+  cwd: string;
+  name?: string;
+  out?: string;
+  noUpdate?: boolean;
+  dryRun?: boolean;
+  /** Injectable for tests; forwarded to `runWorkspaceGraph`. */
+  runner?: WorkspaceGraphRunner;
+  /** Injectable for tests; forwarded to `runWorkspaceGraph`. */
+  hasBinary?: (name: string) => boolean;
+}
+
+/**
+ * Thin wrapper over `runWorkspaceGraph` (lib/workspace-graph.ts) that loads
+ * the real registry — kept separate from the pure core so the core never has
+ * to know how to load `~/.argos/workspaces.json` (same split as
+ * `runWorkspaceLink`/`runWorkspaceShow` above).
+ */
+export function runWorkspaceGraphCommand(options: WorkspaceGraphCommandOptions): WorkspaceGraphReport {
+  let registry;
+  try {
+    registry = loadRegistry();
+  } catch (err) {
+    return { exitCode: 1, error: errorMessage(err) };
+  }
+  return runWorkspaceGraph({ ...options, registry });
+}
+
+const graphSubCommand = defineCommand({
+  meta: {
+    name: "graph",
+    description: "Reconstruye, mergea y bridgea los grafos graphify de un workspace (spec 0007).",
+  },
+  args: {
+    name: {
+      type: "positional",
+      description: "Nombre de workspace (default: resuelto desde el repo actual)",
+      required: false,
+    },
+    out: {
+      type: "string",
+      description: "Directorio de salida (default: <root>/blueprint/workspace-graph o <root>/workspace-graph).",
+    },
+    update: {
+      type: "boolean",
+      default: true,
+      description: "Corre `graphify update` por repo antes de mergear (--no-update para saltarlo).",
+    },
+    dryRun: {
+      type: "boolean",
+      default: false,
+      description: "Imprime el plan y no ejecuta nada.",
+    },
+  },
+  run({ args }) {
+    const name = (args.name as string | undefined)?.trim() || undefined;
+    const out = (args.out as string | undefined)?.trim() || undefined;
+    const report = runWorkspaceGraphCommand({
+      cwd: process.cwd(),
+      name,
+      out,
+      noUpdate: !(args.update as boolean),
+      dryRun: Boolean(args.dryRun),
+    });
+
+    if (report.error) {
+      console.error(pc.red(report.error));
+      process.exit(report.exitCode);
+    }
+
+    if (report.dryRun) {
+      for (const line of report.planLines ?? []) console.log(line);
+      process.exit(0);
+    }
+
+    console.log(`workspace: ${report.root}`);
+    console.log(`repos: ${(report.repos ?? []).length} (${(report.repos ?? []).join(", ")})`);
+    console.log(`${pc.green("✓")} merged-graph -> ${report.mergedGraphPath}`);
+    if (report.mergeSummary) console.log(pc.dim(report.mergeSummary));
+    if (report.bridgeSkipped) {
+      console.log(pc.yellow(`⚠ ${report.bridgeWarning}`));
+    } else if (report.bridgeReportPath) {
+      console.log(`${pc.green("✓")} bridge-report -> ${report.bridgeReportPath}`);
+    }
+
+    process.exit(report.exitCode);
+  },
+});
+
 export const workspaceCommand = defineCommand({
   meta: {
     name: "workspace",
-    description: "Registro machine-local de workspaces (match rules + flota OpenClaw).",
+    description: "Registro machine-local de workspaces (match rules + flota OpenClaw + grafo cross-repo).",
   },
   subCommands: {
     link: linkSubCommand,
     show: showSubCommand,
     agents: agentsSubCommand,
+    graph: graphSubCommand,
   },
 });
