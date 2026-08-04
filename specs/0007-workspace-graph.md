@@ -82,6 +82,48 @@ salta el paso entero (sin fila, sin proceso).
 - Adoptar 3 repos del mismo workspace en sucesión rápida → una sola
   regeneración (debounce de 10 min por raíz, vía stamp file).
 
+## Visualización del puente cross-repo
+
+Hoy la visualización del puente cross-repo se armaba a mano a partir de
+`merged-graph.json`. El comando la produce de fábrica: al final del pipeline
+(después de merge y, si corrió, del bridge), `runWorkspaceGraph` escribe
+`<out>/bridge-graph.html` — una visualización **solo del subgrafo puente**
+(los nodos que participan en al menos un edge `_origin === "bridge"`, más
+esos edges).
+
+- **Habilitado por default**; `--no-viz` lo salta. Nunca se genera en
+  `--dry-run`. Es un paso de mejor esfuerzo: si el merged graph no se puede
+  leer/parsear o la escritura falla, el comando igual termina en éxito
+  (`exitCode 0`) con `bridgeVizWarning` en el reporte — misma tolerancia que
+  el paso de bridge (no es un requisito duro).
+- **100% autocontenido**: cero dependencias externas (sin CDN, sin vendorizar
+  vis.js). Decisión de renderer propio: dado que el subgrafo puente de un
+  workspace real es chico (decenas de nodos, no miles) y el requisito es
+  "cero dependencias", un canvas 2D con layout determinista alcanza y evita
+  el costo de vendorizar/mantener una librería de grafos completa.
+  - Layout **sin física**: se computa en TypeScript (`packages/cli/src/lib/bridge-viz.ts`),
+    no en el navegador — mismo grafo de entrada siempre produce las mismas
+    coordenadas. Nodos agrupados por repo en clusters circulares; los
+    clusters se distribuyen en un círculo grande.
+  - Color por repo (paleta fija de 14 colores, asignados por orden
+    alfabético de repos).
+  - Edges: azul sólido `http_call`, ámbar punteado `shared_constant`.
+  - Leyenda lateral con color + conteo de nodos por repo y checkbox para
+    ocultar/mostrar ese repo.
+  - Hover sobre nodo: tooltip (label, repo, source file). Click en nodo:
+    panel con sus edges puente (context + destino).
+- Merged graph sin edges bridge (0) → el HTML igual se genera, con mensaje
+  explícito ("sin contratos cross-repo detectados") en vez de canvas vacío.
+- Implementación: `renderBridgeVizHtml(mergedGraph, opts)` en
+  `packages/cli/src/lib/bridge-viz.ts` es una función pura que retorna el
+  HTML como string — construido desde un template literal TS (no un asset
+  aparte), así el typecheck lo cubre sin resolución de paths extra.
+  `runWorkspaceGraph` la llama y escribe el archivo. Los datos embebidos se
+  escapan con el patrón anti-XSS estándar (`JSON.stringify(...).replace(/</g,
+  "\\u003c")`), más un escapado adicional del lado del navegador antes de
+  cualquier interpolación en `innerHTML` (defensa en profundidad, ya que las
+  labels vienen de código fuente escaneado, no de una fuente confiable).
+
 ## Componentes
 
 - `packages/cli/assets/scripts/graphify-bridge.py` — copia literal de
@@ -97,7 +139,10 @@ salta el paso entero (sin fila, sin proceso).
   `shouldTriggerWorkspaceGraph`/`writeWorkspaceGraphStamp`/
   `triggerWorkspaceGraphBackground` para la integración con `adopt`.
 - `packages/cli/src/commands/workspace.ts` — subcomando `graph` (citty),
-  junto a `link`/`show`/`agents`.
+  junto a `link`/`show`/`agents`; flag `--viz`/`--no-viz` (default `true`).
+- `packages/cli/src/lib/bridge-viz.ts` — `renderBridgeVizHtml` (visualización
+  del puente cross-repo, ver sección arriba) + tipos `MergedGraph`/
+  `MergedGraphNode`/`MergedGraphLink`.
 - `packages/cli/src/commands/adopt.ts` — paso final adicional en `runAdopt`:
   `AdoptOptions.workspaceGraph` (default `true`) + `workspaceGraphSpawn`/
   `workspaceGraphNow` inyectables para tests; flag `--no-workspace-graph` en

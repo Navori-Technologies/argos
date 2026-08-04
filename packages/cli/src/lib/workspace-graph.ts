@@ -4,12 +4,17 @@ import { existsSync, mkdirSync, openSync, readdirSync, readFileSync } from "node
 import { dirname, join, resolve } from "node:path";
 import { resolveAssetsDir } from "./assets.js";
 import { writeFileAtomic } from "./atomic-write.js";
+import { renderBridgeVizHtml, type MergedGraph } from "./bridge-viz.js";
 import { hasConfig, readConfig } from "./config.js";
 import type { GraphifyCliResult } from "./graphify-plugin.js";
 import { getRemoteOriginUrl } from "./git.js";
 import { resolveArgosHome } from "./paths.js";
 import { hasBinary as hasBinaryReal } from "./which.js";
 import { resolveWorkspaceForRepo, type WorkspaceRegistry } from "./workspaces.js";
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
 
 /**
  * `argos workspace graph [name]` (spec 0007): productizes the external
@@ -167,6 +172,8 @@ export interface WorkspaceGraphOptions {
   noUpdate?: boolean;
   /** Print the plan and exit without running anything. */
   dryRun?: boolean;
+  /** Generate `<out>/bridge-graph.html` (default `true`); `--no-viz` skips it. Never runs in `dryRun`. */
+  viz?: boolean;
   /** Injectable for tests; defaults to `runWorkspaceGraphCli`. */
   runner?: WorkspaceGraphRunner;
   /** Injectable for tests; defaults to the real `hasBinary` from `which.ts`. */
@@ -199,6 +206,10 @@ export interface WorkspaceGraphReport {
   /** True when the bridge step was skipped (no `python3`, or the bridge script itself failed) — always a warning, never fails the whole command. */
   bridgeSkipped?: boolean;
   bridgeWarning?: string;
+  /** `<out>/bridge-graph.html`, written when `viz` isn't disabled and rendering succeeded. */
+  bridgeVizPath?: string;
+  /** Set instead of `bridgeVizPath` when rendering failed — never fails the whole command (same tolerance as the bridge step). */
+  bridgeVizWarning?: string;
 }
 
 function commandFailureDetail(result: GraphifyCliResult): string {
@@ -349,40 +360,74 @@ export function runWorkspaceGraph(options: WorkspaceGraphOptions): WorkspaceGrap
     mergeSummary: mergeResult.stdout.trim() || undefined,
   };
 
+  let finalReport: WorkspaceGraphReport;
   if (!hasBinary("python3")) {
-    return {
+    finalReport = {
       ...report,
       bridgeSkipped: true,
       bridgeWarning: "'python3' no está en PATH — se omitió el bridge de contratos cross-repo (merge sí se generó).",
     };
+  } else {
+    const bridgeScript = resolveBridgeScriptPath();
+    const bridgeArgs = [
+      bridgeScript,
+      "--graph",
+      mergedGraphPath,
+      ...repos.map((r) => r.path),
+      "--report",
+      bridgeReportPath,
+    ];
+    const bridgeResult = runner("python3", bridgeArgs, BRIDGE_TIMEOUT_MS);
+    if (bridgeResult.error) {
+      finalReport = {
+        ...report,
+        bridgeSkipped: true,
+        bridgeWarning: `el bridge de contratos falló (${spawnFailureDetail(bridgeResult.error, "python3")}) — merge sí se generó.`,
+      };
+    } else if (bridgeResult.status !== 0) {
+      finalReport = {
+        ...report,
+        bridgeSkipped: true,
+        bridgeWarning: `el bridge de contratos falló (${commandFailureDetail(bridgeResult)}) — merge sí se generó.`,
+      };
+    } else {
+      finalReport = { ...report, bridgeReportPath };
+    }
   }
 
-  const bridgeScript = resolveBridgeScriptPath();
-  const bridgeArgs = [
-    bridgeScript,
-    "--graph",
-    mergedGraphPath,
-    ...repos.map((r) => r.path),
-    "--report",
-    bridgeReportPath,
-  ];
-  const bridgeResult = runner("python3", bridgeArgs, BRIDGE_TIMEOUT_MS);
-  if (bridgeResult.error) {
-    return {
-      ...report,
-      bridgeSkipped: true,
-      bridgeWarning: `el bridge de contratos falló (${spawnFailureDetail(bridgeResult.error, "python3")}) — merge sí se generó.`,
-    };
-  }
-  if (bridgeResult.status !== 0) {
-    return {
-      ...report,
-      bridgeSkipped: true,
-      bridgeWarning: `el bridge de contratos falló (${commandFailureDetail(bridgeResult)}) — merge sí se generó.`,
-    };
+  const viz = options.viz ?? true;
+  if (viz) {
+    finalReport = generateBridgeViz(finalReport, mergedGraphPath, outDir, resolution.workspaceName);
   }
 
-  return { ...report, bridgeReportPath };
+  return finalReport;
+}
+
+/**
+ * Reads the just-written `<out>/merged-graph.json` and writes
+ * `<out>/bridge-graph.html` — a best-effort enhancement on top of an
+ * already-valid merge: a failure of every kind (unreadable/malformed merged
+ * graph, write error) is reported as `bridgeVizWarning` rather than failing
+ * the command, same tolerance as the bridge step itself.
+ */
+function generateBridgeViz(
+  report: WorkspaceGraphReport,
+  mergedGraphPath: string,
+  outDir: string,
+  workspaceName: string,
+): WorkspaceGraphReport {
+  const bridgeVizPath = join(outDir, "bridge-graph.html");
+  try {
+    const mergedGraph = JSON.parse(readFileSync(mergedGraphPath, "utf-8")) as MergedGraph;
+    const html = renderBridgeVizHtml(mergedGraph, { workspaceName });
+    writeFileAtomic(bridgeVizPath, html);
+    return { ...report, bridgeVizPath };
+  } catch (err) {
+    return {
+      ...report,
+      bridgeVizWarning: `no se pudo generar bridge-graph.html (${errorMessage(err)}).`,
+    };
+  }
 }
 
 // --- adopt integration: debounced background trigger ------------------------
