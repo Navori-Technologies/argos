@@ -1,0 +1,46 @@
+---
+import Icon from './Icon.astro';
+
+const links = [
+  { href: 'https://www.npmjs.com/package/argos-harness', label: 'npm · argos-harness', icon: 'npm' as const },
+  { href: 'https://github.com/Navori-Technologies/argos', label: 'GitHub · Navori-Technologies/argos', icon: 'github' as const },
+];
+---
+
+<footer class="relative border-t border-white/[0.06] px-6 py-20">
+  <div class="pointer-events-none absolute inset-x-0 top-0 mx-auto h-px max-w-md bg-gradient-to-r from-transparent via-brand/40 to-transparent"></div>
+
+  <div class="mx-auto flex max-w-6xl flex-col items-center gap-10 text-center">
+    <div data-reveal class="flex items-center gap-3">
+      <span class="grid h-9 w-9 place-items-center rounded-full bg-brand/15 text-brand">
+        <Icon name="eye" class="h-5 w-5" />
+      </span>
+      <span class="font-display text-2xl font-semibold tracking-tight text-white">argos</span>
+    </div>
+
+    <p data-reveal style="--reveal-delay: 60ms" class="max-w-md text-sm leading-relaxed text-mist-400">
+      El vigía de cien ojos para tus repos. Vigilancia total, evidencia antes que inferencia.
+    </p>
+
+    <div data-reveal style="--reveal-delay: 120ms" class="flex flex-col items-center gap-3 sm:flex-row">
+      {
+        links.map((l) => (
+          <a
+            href={l.href}
+            class="group flex items-center gap-2.5 rounded-full border border-white/10 bg-white/[0.03] py-2.5 pl-4 pr-3 text-sm text-mist-200 transition-transform duration-300 [transition-timing-function:var(--ease-out-strong)] hover:text-white active:scale-[0.98]"
+          >
+            <Icon name={l.icon} class="h-4 w-4" />
+            {l.label}
+            <span class="grid h-6 w-6 place-items-center rounded-full bg-white/[0.06] transition-transform duration-300 [transition-timing-function:var(--ease-out-strong)] group-hover:translate-x-0.5 group-hover:-translate-y-px">
+              <Icon name="arrow-up-right" class="h-3.5 w-3.5" />
+            </span>
+          </a>
+        ))
+      }
+    </div>
+
+    <p class="text-xs text-mist-500">
+      Licencia MIT · © {new Date().getFullYear()} Navori Technologies
+    </p>
+  </div>
+</footer>

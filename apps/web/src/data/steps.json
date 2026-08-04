@@ -1,0 +1,23 @@
+[
+  {
+    "id": "install",
+    "order": 1,
+    "command": "npm i -g argos-harness",
+    "title": "Instala una vez",
+    "detail": "El motor —agentes, skills y hooks— vive a nivel usuario en ~/.claude. No se copia por repo; los repos solo llevan datos."
+  },
+  {
+    "id": "adopt",
+    "order": 2,
+    "command": "argos adopt",
+    "title": "Aterriza en tu repo",
+    "detail": "argos detecta el stack, el quality gate y los skills aplicables, y escribe argos.config.json más una ficha delgada. Sin ceremonia."
+  },
+  {
+    "id": "work",
+    "order": 3,
+    "command": "claude",
+    "title": "Trabaja — y el vigía observa",
+    "detail": "Abre Claude Code y pide lo que necesites. El harness orquesta agentes, corre el gate del repo y bloquea lo destructivo mientras tú avanzas."
+  }
+]

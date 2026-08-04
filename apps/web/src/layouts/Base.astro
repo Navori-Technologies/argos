@@ -1,0 +1,50 @@
+---
+import '../styles/global.css';
+
+interface Props {
+  title?: string;
+  description?: string;
+}
+
+const {
+  title = 'argos — el vigía de cien ojos para tus repos',
+  description = 'argos es un harness global-first para Claude Code: se instala una vez a nivel usuario y gobierna todos tus repos con agentes orquestados, guardias por hooks y un grafo cross-repo del workspace.',
+} = Astro.props;
+
+const canonical = new URL(Astro.url.pathname, Astro.site).href;
+---
+
+<!doctype html>
+<html lang="es-MX">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="canonical" href={canonical} />
+    <meta name="generator" content={Astro.generator} />
+
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <meta name="theme-color" content="#0d1117" />
+
+    <!-- Open Graph -->
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={canonical} />
+    <meta name="twitter:card" content="summary_large_image" />
+  </head>
+  <!-- overflow-x-clip (not -hidden): hidden turns <body> into a scroll
+       container and silently breaks #anchor navigation (the window's max
+       scroll becomes ~0). clip blocks horizontal overflow without creating
+       a scroll container. -->
+  <body class="relative overflow-x-clip antialiased">
+    <a
+      href="#contenido"
+      class="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded-md focus:bg-brand focus:px-4 focus:py-2 focus:font-medium focus:text-ink-950"
+    >
+      Saltar al contenido
+    </a>
+    <slot />
+  </body>
+</html>

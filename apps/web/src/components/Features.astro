@@ -1,0 +1,60 @@
+---
+import { getCollection } from 'astro:content';
+import FeatureCard from './FeatureCard.astro';
+
+/**
+ * Grid "Asymmetrical Bento": el feature estrella (workspace graph) ocupa un
+ * bloque 2x2; el resto se acomoda alrededor. Contenido desde la collection.
+ */
+const features = (await getCollection('features')).sort(
+  (a, b) => a.data.order - b.data.order
+);
+
+type IconName = 'compass' | 'network' | 'shield' | 'graph' | 'brain' | 'terminal';
+
+const layout: Record<string, { icon: IconName; span: string }> = {
+  adopt: { icon: 'compass', span: 'md:col-span-1' },
+  agents: { icon: 'network', span: 'md:col-span-1' },
+  guards: { icon: 'shield', span: 'md:col-span-1' },
+  'workspace-graph': { icon: 'graph', span: 'md:col-span-2 md:row-span-2' },
+  engram: { icon: 'brain', span: 'md:col-span-1' },
+  graphify: { icon: 'terminal', span: 'md:col-span-1' },
+};
+
+// Orden de render pensado para el auto-flow del bento (featured primero).
+const renderOrder = ['workspace-graph', 'adopt', 'engram', 'agents', 'guards', 'graphify'];
+const ordered = renderOrder
+  .map((id) => features.find((f) => f.id === id))
+  .filter((f): f is (typeof features)[number] => Boolean(f));
+---
+
+<section id="features" class="relative mx-auto max-w-6xl px-6 py-28 md:py-40">
+  <div class="mx-auto mb-16 max-w-2xl text-center">
+    <p data-reveal class="mb-5 inline-block rounded-full border border-white/10 bg-white/[0.03] px-3 py-1 text-[10px] font-medium uppercase tracking-[0.2em] text-brand">
+      Las piezas
+    </p>
+    <h2 data-reveal style="--reveal-delay: 60ms" class="text-balance text-4xl font-semibold tracking-tight text-white sm:text-5xl">
+      Un motor, cien ojos vigilando
+    </h2>
+    <p data-reveal style="--reveal-delay: 120ms" class="mt-5 text-lg text-mist-300">
+      Cada pieza resuelve el quality gate y las convenciones del repo en runtime — nunca hardcodeadas.
+    </p>
+  </div>
+
+  <div class="grid auto-rows-[minmax(0,1fr)] grid-cols-1 gap-4 md:grid-cols-3">
+    {
+      ordered.map((f, i) => (
+        <FeatureCard
+          icon={layout[f.id].icon}
+          title={f.data.title}
+          summary={f.data.summary}
+          command={f.data.command}
+          accent={f.data.accent}
+          featured={f.data.featured}
+          spanClass={layout[f.id].span}
+          delay={i * 70}
+        />
+      ))
+    }
+  </div>
+</section>

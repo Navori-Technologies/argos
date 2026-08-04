@@ -1,0 +1,152 @@
+---
+/**
+ * Constelación animada de nodos y aristas (guiño al workspace graph y a
+ * los cien ojos). Isla vanilla cargada en idle vía requestIdleCallback:
+ * cero dependencias, se detiene sola bajo prefers-reduced-motion y fuera
+ * de viewport, y degrada a un fondo estático si no hay soporte de canvas.
+ */
+---
+
+<canvas
+  id="constellation"
+  aria-hidden="true"
+  class="pointer-events-none absolute inset-0 h-full w-full opacity-70 [mask-image:radial-gradient(ellipse_at_center,black_35%,transparent_78%)]"
+></canvas>
+
+<script>
+  type Node = { x: number; y: number; vx: number; vy: number; kind: 0 | 1 };
+
+  const canvas = document.getElementById('constellation') as HTMLCanvasElement | null;
+  if (canvas) {
+    const ctx = canvas.getContext('2d');
+    const reduce = window.matchMedia('(prefers-reduced-motion: reduce)');
+
+    const HTTP = '158,203,255';
+    const CONSTANT = '224,176,96';
+
+    let nodes: Node[] = [];
+    let raf = 0;
+    let dpr = 1;
+    let w = 0;
+    let h = 0;
+    let running = false;
+
+    function resize() {
+      if (!canvas || !ctx) return;
+      const rect = canvas.getBoundingClientRect();
+      dpr = Math.min(window.devicePixelRatio || 1, 2);
+      w = rect.width;
+      h = rect.height;
+      canvas.width = Math.floor(w * dpr);
+      canvas.height = Math.floor(h * dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+      const density = Math.min(72, Math.floor((w * h) / 16000));
+      nodes = Array.from({ length: density }, () => ({
+        x: Math.random() * w,
+        y: Math.random() * h,
+        vx: (Math.random() - 0.5) * 0.18,
+        vy: (Math.random() - 0.5) * 0.18,
+        kind: Math.random() > 0.5 ? 1 : 0,
+      }));
+    }
+
+    function frame() {
+      if (!ctx) return;
+      ctx.clearRect(0, 0, w, h);
+
+      for (const n of nodes) {
+        n.x += n.vx;
+        n.y += n.vy;
+        if (n.x < 0 || n.x > w) n.vx *= -1;
+        if (n.y < 0 || n.y > h) n.vy *= -1;
+      }
+
+      // Aristas entre nodos cercanos: color por tipo (HTTP / constante).
+      for (let i = 0; i < nodes.length; i++) {
+        for (let j = i + 1; j < nodes.length; j++) {
+          const a = nodes[i];
+          const b = nodes[j];
+          const dx = a.x - b.x;
+          const dy = a.y - b.y;
+          const dist = Math.hypot(dx, dy);
+          if (dist < 132) {
+            const alpha = (1 - dist / 132) * 0.4;
+            const color = a.kind && b.kind ? CONSTANT : HTTP;
+            ctx.strokeStyle = `rgba(${color},${alpha})`;
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(a.x, a.y);
+            ctx.lineTo(b.x, b.y);
+            ctx.stroke();
+          }
+        }
+      }
+
+      for (const n of nodes) {
+        ctx.fillStyle = `rgba(${n.kind ? CONSTANT : HTTP},0.85)`;
+        ctx.beginPath();
+        ctx.arc(n.x, n.y, 1.6, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      raf = requestAnimationFrame(frame);
+    }
+
+    function drawStatic() {
+      if (!ctx) return;
+      ctx.clearRect(0, 0, w, h);
+      for (const n of nodes) {
+        ctx.fillStyle = `rgba(${n.kind ? CONSTANT : HTTP},0.7)`;
+        ctx.beginPath();
+        ctx.arc(n.x, n.y, 1.6, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    function start() {
+      if (running) return;
+      running = true;
+      if (reduce.matches) {
+        drawStatic();
+        return;
+      }
+      raf = requestAnimationFrame(frame);
+    }
+
+    function stop() {
+      running = false;
+      cancelAnimationFrame(raf);
+    }
+
+    // Pausa cuando el hero sale de viewport (ahorro de batería/CPU).
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const e of entries) {
+          if (e.isIntersecting) start();
+          else stop();
+        }
+      },
+      { threshold: 0 }
+    );
+
+    const boot = () => {
+      resize();
+      io.observe(canvas);
+      window.addEventListener('resize', () => {
+        resize();
+        if (!running || reduce.matches) drawStatic();
+      });
+      reduce.addEventListener('change', () => {
+        stop();
+        start();
+      });
+    };
+
+    if ('requestIdleCallback' in window) {
+      (window as Window & typeof globalThis).requestIdleCallback(boot);
+    } else {
+      setTimeout(boot, 200);
+    }
+  }
+</script>

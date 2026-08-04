@@ -1,0 +1,52 @@
+[
+  {
+    "id": "adopt",
+    "order": 1,
+    "title": "argos adopt",
+    "summary": "Aterriza en cualquier repo: detecta el stack, el quality gate y los skills aplicables, y escribe argos.config.json más una ficha delgada (CLAUDE.md). Corre --refresh cuando el repo cambie y vuelve a detectar todo.",
+    "command": "argos adopt",
+    "accent": "brand",
+    "featured": false
+  },
+  {
+    "id": "agents",
+    "order": 2,
+    "title": "Motor de agentes orquestados",
+    "summary": "Viven una sola vez en ~/.claude/agents/: explorer, researcher, implementer, reviewer, las lentes 4R y commit-pr-pilot. El agente principal descompone la tarea, paraleliza y sintetiza los resultados.",
+    "accent": "http",
+    "featured": false
+  },
+  {
+    "id": "guards",
+    "order": 3,
+    "title": "Guardias por hooks",
+    "summary": "Bloqueo de comandos destructivos y quality gate del repo resuelto en runtime desde su ficha, nunca hardcodeado. La verificación es un gate, no un buen deseo: verify-before-done.",
+    "accent": "constant",
+    "featured": false
+  },
+  {
+    "id": "workspace-graph",
+    "order": 4,
+    "title": "argos workspace graph",
+    "summary": "El grafo cross-repo de tu workspace: fusiona el grafo de cada repo y tiende puentes entre los contratos reales — llamadas HTTP del front a rutas del back, constantes de cola de producer a consumer. Genera una visualización HTML autocontenida y un reporte de contratos rotos o ambiguos.",
+    "command": "argos workspace graph bonum",
+    "accent": "brand",
+    "featured": true
+  },
+  {
+    "id": "engram",
+    "order": 5,
+    "title": "Memoria persistente (engram)",
+    "summary": "Memoria que sobrevive entre sesiones y compactaciones. Decisiones, causas raíz y convenciones quedan guardadas y se recuperan cuando el contexto vuelve a hacer falta.",
+    "accent": "http",
+    "featured": false
+  },
+  {
+    "id": "graphify",
+    "order": 6,
+    "title": "Grafo de conocimiento (graphify)",
+    "summary": "Un grafo por repo que puedes consultar: query, path y explain sobre cómo se conecta tu código. Es la materia prima que el workspace graph fusiona a nivel multi-repo.",
+    "accent": "constant",
+    "featured": false
+  }
+]

@@ -1,0 +1,120 @@
+---
+import { getCollection } from 'astro:content';
+
+/**
+ * Simulación animada de una corrida real de `argos workspace graph bonum`
+ * con efecto de tipeo. La animación arranca cuando el bloque entra en
+ * viewport (IntersectionObserver, equivalente a client:visible) y respeta
+ * prefers-reduced-motion mostrando la salida completa de una.
+ */
+const lines = (await getCollection('terminal')).sort(
+  (a, b) => a.data.order - b.data.order
+);
+
+const kindClass: Record<string, string> = {
+  prompt: 'text-brand',
+  out: 'text-mist-300',
+  ok: 'text-brand',
+  http: 'text-http',
+  constant: 'text-constant',
+  warn: 'text-rose-400',
+};
+---
+
+<div class="group relative mx-auto max-w-3xl rounded-[2rem] border border-white/[0.08] bg-white/[0.02] p-2 shadow-[0_40px_100px_-40px_rgba(0,0,0,0.9)]">
+  <!-- Sheen que barre el borde superior -->
+  <div aria-hidden="true" class="pointer-events-none absolute inset-x-8 top-0 h-px overflow-hidden">
+    <span class="block h-px w-24 bg-gradient-to-r from-transparent via-brand to-transparent" style="animation: sheen 4.5s var(--ease-out-expo) infinite"></span>
+  </div>
+  <div class="relative overflow-hidden rounded-[calc(2rem-0.5rem)] bg-ink-950 shadow-[inset_0_1px_1px_rgba(255,255,255,0.06)]">
+  <!-- Barra de título estilo terminal -->
+  <div
+    class="flex items-center gap-2 border-b border-white/[0.06] bg-white/[0.02] px-4 py-3"
+  >
+    <span class="h-3 w-3 rounded-full bg-rose-500/80"></span>
+    <span class="h-3 w-3 rounded-full bg-amber-400/80"></span>
+    <span class="h-3 w-3 rounded-full bg-emerald-400/80"></span>
+    <span class="ml-3 font-mono text-xs text-mist-400">~/work — argos</span>
+  </div>
+
+  <pre
+    id="argos-terminal"
+    data-lines={JSON.stringify(lines.map((l) => ({ kind: l.data.kind, text: l.data.text })))}
+    class="m-0 max-h-96 overflow-hidden px-5 py-4 font-mono text-[13px] leading-relaxed sm:text-sm"
+  ><code id="argos-terminal-body" class="block whitespace-pre-wrap"></code><span id="argos-caret" class="inline-block h-4 w-2 translate-y-0.5 bg-brand" style="animation: blink-caret 1s step-end infinite"></span></pre>
+
+  <!-- Salida estática accesible / fallback sin JS o con reduced-motion off-path -->
+  <noscript>
+    <pre class="m-0 px-5 py-4 font-mono text-sm">{lines.map((l) => l.data.text).join('\n')}</pre>
+  </noscript>
+  </div>
+</div>
+
+<script define:vars={{ kindClass }}>
+  const pre = document.getElementById('argos-terminal');
+  const body = document.getElementById('argos-terminal-body');
+  const caret = document.getElementById('argos-caret');
+  if (pre && body) {
+    const lines = JSON.parse(pre.dataset.lines || '[]');
+    const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    const line = (kind, text) => {
+      const span = document.createElement('span');
+      span.className = `block ${kindClass[kind] || ''}`;
+      const prefix = kind === 'prompt' ? '$ ' : kind === 'warn' ? '  ✗ ' : '  ';
+      span.dataset.prefix = prefix;
+      return span;
+    };
+
+    const renderAll = () => {
+      body.textContent = '';
+      for (const l of lines) {
+        const span = line(l.kind, l.text);
+        span.textContent = (span.dataset.prefix || '') + l.text;
+        body.appendChild(span);
+      }
+      if (caret) caret.style.display = 'none';
+    };
+
+    const play = async () => {
+      body.textContent = '';
+      for (const l of lines) {
+        const span = line(l.kind, l.text);
+        body.appendChild(span);
+        const prefix = span.dataset.prefix || '';
+        if (l.kind === 'prompt') {
+          // Efecto de tipeo solo en el comando que "escribe" el usuario.
+          for (let i = 0; i <= l.text.length; i++) {
+            span.textContent = prefix + l.text.slice(0, i);
+            await wait(38);
+          }
+        } else {
+          span.textContent = prefix + l.text;
+          await wait(260);
+        }
+      }
+      if (caret) caret.style.display = 'none';
+    };
+
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+    if (reduce || !('IntersectionObserver' in window)) {
+      renderAll();
+    } else {
+      let played = false;
+      const io = new IntersectionObserver(
+        (entries, obs) => {
+          for (const e of entries) {
+            if (e.isIntersecting && !played) {
+              played = true;
+              play();
+              obs.disconnect();
+            }
+          }
+        },
+        { threshold: 0.4 }
+      );
+      io.observe(pre);
+    }
+  }
+</script>

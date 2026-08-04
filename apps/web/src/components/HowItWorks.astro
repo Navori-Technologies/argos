@@ -1,0 +1,51 @@
+---
+import { getCollection } from 'astro:content';
+
+/**
+ * "Cómo funciona" en 3 pasos, desde la collection steps. Cards Double-Bezel
+ * con número grande y comando mono. Stagger via --reveal-delay.
+ */
+const steps = (await getCollection('steps')).sort(
+  (a, b) => a.data.order - b.data.order
+);
+---
+
+<section id="empezar" class="relative mx-auto max-w-6xl px-6 py-28 md:py-40">
+  <div class="mx-auto mb-16 max-w-2xl text-center">
+    <p data-reveal class="mb-5 inline-block rounded-full border border-white/10 bg-white/[0.03] px-3 py-1 text-[10px] font-medium uppercase tracking-[0.2em] text-brand">
+      Empezar
+    </p>
+    <h2 data-reveal style="--reveal-delay: 60ms" class="text-balance text-4xl font-semibold tracking-tight text-white sm:text-5xl">
+      Tres pasos y el vigía observa
+    </h2>
+  </div>
+
+  <ol class="grid grid-cols-1 gap-4 md:grid-cols-3">
+    {
+      steps.map((step, i) => (
+        <li
+          data-reveal
+          style={`--reveal-delay: ${i * 90}ms; --accent: var(--color-brand)`}
+          class="bezel-card group rounded-[2rem] border border-white/[0.08] bg-white/[0.02] p-2"
+        >
+          <div class="bezel-core relative flex h-full flex-col overflow-hidden rounded-[calc(2rem-0.5rem)] bg-ink-950 p-8 shadow-[inset_0_1px_1px_rgba(255,255,255,0.06)]">
+            <div class="pointer-events-none absolute -right-10 -top-12 font-display text-[9rem] font-bold leading-none text-white/[0.03] select-none">
+              {step.data.order}
+            </div>
+            <span class="relative grid h-11 w-11 place-items-center rounded-full border border-brand/30 bg-brand/10 font-display text-lg font-semibold text-brand">
+              {step.data.order}
+            </span>
+            <h3 class="relative mt-6 font-display text-xl font-semibold tracking-tight text-white">
+              {step.data.title}
+            </h3>
+            <p class="relative mt-3 flex-1 text-sm leading-relaxed text-mist-300">{step.data.detail}</p>
+            <code class="relative mt-6 flex w-max max-w-full items-center gap-2 rounded-full border border-white/[0.06] bg-black/40 px-4 py-2 font-mono text-xs text-mist-100">
+              <span class="select-none text-brand/70">$</span>
+              <span class="truncate">{step.data.command}</span>
+            </code>
+          </div>
+        </li>
+      ))
+    }
+  </ol>
+</section>
