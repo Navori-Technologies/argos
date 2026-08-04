@@ -24,6 +24,7 @@ import { createBackup } from "../lib/backup.js";
 import { buildFichaContent, FICHA_BLOCK_ID } from "../lib/ficha.js";
 import { checkGitRepo, getRemoteOriginUrl, parseIdentityFromRemote } from "../lib/git.js";
 import {
+  hasGraphifyGraph,
   hasGraphifyProjectHook,
   installGraphifyProjectScope,
   manualGraphifyCommands,
@@ -392,15 +393,16 @@ export function runAdopt(options: AdoptOptions): AdoptReport {
     rows.push({ field: "ficha (./CLAUDE.md)", value: errorMessage(err), source: "error" });
   }
 
-  // Graphify project-scope hook (spec 0006 R9–R13): last step, after config +
-  // ficha, so a graphify failure never blocks the core adopt work. R10
-  // (hook already in `<cwd>/.claude/settings.json`) is checked first and
-  // takes precedence over R11 (binary absent) — a hook already committed to
-  // the repo counts as installed even on a machine without `graphify` in
-  // PATH.
+  // Graphify project-scope hook (spec 0006 R9–R13) + initial graph bootstrap:
+  // last step, after config + ficha, so a graphify failure never blocks the
+  // core adopt work. R10 (hook already in `<cwd>/.claude/settings.json`) is
+  // checked first and takes precedence over R11 (binary absent) — but only
+  // when the graph also already exists (`hasGraphifyGraph`); a hook already
+  // committed to the repo but with no graph yet still needs the binary to
+  // run `graphify update`, same as a from-scratch install.
   if (options.installGraphify ?? true) {
     const hasBinary = options.graphifyHasBinary ?? hasBinaryReal;
-    if (hasGraphifyProjectHook(cwd)) {
+    if (hasGraphifyProjectHook(cwd) && hasGraphifyGraph(cwd)) {
       rows.push({ field: "graphify", value: "ya instalado", source: "detected" });
     } else if (!hasBinary("graphify")) {
       rows.push({
@@ -413,7 +415,11 @@ export function runAdopt(options: AdoptOptions): AdoptReport {
       if (result.status === "error") {
         rows.push({ field: "graphify", value: result.detail ?? "graphify install --project falló", source: "error" });
       } else {
-        rows.push({ field: "graphify", value: result.detail ?? "hook PreToolUse instalado", source: "detected" });
+        rows.push({
+          field: "graphify",
+          value: result.detail ?? "hook PreToolUse instalado; grafo inicial generado",
+          source: "detected",
+        });
       }
     }
   }

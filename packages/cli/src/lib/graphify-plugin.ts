@@ -29,6 +29,7 @@ const GRAPHIFY_INSTALL_ARGS = ["install"];
 const GRAPHIFY_INSTALL_PROJECT_ARGS = ["install", "--project"];
 const GRAPHIFY_HOOK_INSTALL_ARGS = ["hook", "install"];
 const GRAPHIFY_VERSION_ARGS = ["--version"];
+const GRAPHIFY_UPDATE_ARGS = ["update"];
 
 // `uv tool install`/`pipx install` resolve Python deps, which can be slow;
 // `graphify install`/`--project`/`hook install` are local file operations;
@@ -37,6 +38,10 @@ const GRAPHIFY_VERSION_ARGS = ["--version"];
 const BINARY_INSTALL_TIMEOUT_MS = 300_000;
 const GRAPHIFY_COMMAND_TIMEOUT_MS = 60_000;
 const GRAPHIFY_VERSION_TIMEOUT_MS = 30_000;
+// `graphify update` does a from-scratch AST build of the whole repo (no LLM,
+// but still walks every file) — much slower than the local file operations
+// above, especially on large repos, so it gets its own, wider bound.
+const GRAPHIFY_UPDATE_TIMEOUT_MS = 300_000;
 
 export type GraphifyBinaryName = "uv" | "pipx" | "graphify";
 
@@ -84,7 +89,7 @@ export function manualGraphifyCommands(): string[] {
 
 /** The manual commands an operator can run themselves for the project-scope install (R12). */
 function manualGraphifyProjectCommands(): string[] {
-  return ["graphify install --project", "graphify hook install"];
+  return ["graphify install --project", "graphify hook install", "graphify update ."];
 }
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
@@ -124,6 +129,17 @@ export function hasGraphifyProjectHook(cwd: string): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * Read-only peek for whether the initial graph bootstrap already ran:
+ * does `<cwd>/graphify-out/graph.json` exist? Never throws — used to decide
+ * whether `graphify update <cwd>` still needs to run, and to confirm it
+ * worked afterwards (same "re-peek, no documented exit-code contract"
+ * philosophy as `hasGraphifyProjectHook`).
+ */
+export function hasGraphifyGraph(cwd: string): boolean {
+  return existsSync(join(cwd, "graphify-out", "graph.json"));
 }
 
 function commandFailureDetail(result: GraphifyCliResult, manualCommands: string[]): string {
@@ -262,32 +278,76 @@ export interface InstallGraphifyProjectScopeOptions {
   runner?: GraphifyRunner;
 }
 
+/** Manual command for completing only the graph bootstrap, when hook/skill are already in place. */
+const GRAPHIFY_UPDATE_ONLY_MANUAL_COMMANDS = ["graphify update ."];
+
+/** Prefix used whenever `graphify update` fails but the hook (and skill) were already written — either before this call, or by this same call. */
+const GRAPH_NOT_BUILT_PREFIX =
+  "el hook PreToolUse (y el skill) ya quedaron escritos; solo falló el build del grafo inicial: ";
+
 /**
- * Installs Graphify project-scope in `cwd` (spec 0006 R9, R10, R12):
- * - The PreToolUse hook already appears in `<cwd>/.claude/settings.json`
- *   (`hasGraphifyProjectHook`) → `unchanged` with detail "ya instalado",
- *   nothing spawned (R10). A corrupt or missing settings.json reads as "not
- *   installed" (peek never throws).
- * - Otherwise runs `graphify install --project` then `graphify hook install`
- *   in `cwd`, then re-peeks `hasGraphifyProjectHook(cwd)`; only a positive
- *   re-peek reports `created` (R9) — mirrors the user-scope smoke test since
- *   neither command has a documented exit-code contract.
- * - Either command failing (spawn error or non-zero exit), or the re-peek
- *   coming back negative despite both commands succeeding, → `error` with
- *   the causa and manual commands (R12).
- * Never writes `.claude/settings.json` or the repo's CLAUDE.md itself —
- * that's always `graphify install --project`/`graphify hook install`'s job.
+ * Runs `graphify update <cwd>` and re-peeks `hasGraphifyGraph(cwd)`.
+ * Returns `undefined` on success (caller decides the final status/detail),
+ * or an error detail string on spawn failure, non-zero exit, or a negative
+ * re-peek despite a clean exit.
+ */
+function runGraphUpdate(cwd: string, runner: GraphifyRunner): string | undefined {
+  const updateResult = runner("graphify", [...GRAPHIFY_UPDATE_ARGS, cwd], GRAPHIFY_UPDATE_TIMEOUT_MS, cwd);
+  if (updateResult.error) {
+    return GRAPH_NOT_BUILT_PREFIX + spawnFailureDetail(updateResult.error, "graphify", GRAPHIFY_UPDATE_ONLY_MANUAL_COMMANDS);
+  }
+  if (updateResult.status !== 0) {
+    return GRAPH_NOT_BUILT_PREFIX + commandFailureDetail(updateResult, GRAPHIFY_UPDATE_ONLY_MANUAL_COMMANDS);
+  }
+  if (!hasGraphifyGraph(cwd)) {
+    return `${GRAPH_NOT_BUILT_PREFIX}graphify update terminó sin error pero ${cwd}/graphify-out/graph.json no aparece — corre manualmente: ${GRAPHIFY_UPDATE_ONLY_MANUAL_COMMANDS.join(" && ")}`;
+  }
+  return undefined;
+}
+
+/**
+ * Installs Graphify project-scope in `cwd` and bootstraps its initial graph
+ * (spec 0006 R9, R10, R12, extended with the `graphify update` bootstrap):
+ * - Hook already installed (`hasGraphifyProjectHook`) AND the graph already
+ *   exists (`hasGraphifyGraph`) → `unchanged` with detail "ya instalado",
+ *   nothing spawned (R10). A corrupt or missing settings.json/graph.json
+ *   reads as "not installed"/"no graph" (peeks never throw).
+ * - Hook already installed but the graph is absent → runs only `graphify
+ *   update <cwd>` (an AST build with no LLM involved), then re-peeks
+ *   `hasGraphifyGraph`; a positive re-peek reports `created` with a detail
+ *   noting the hook was already there and only the graph got (re)built. A
+ *   spawn error, non-zero exit, or negative re-peek → `error`, with a detail
+ *   that makes clear the hook/skill are fine and only the graph build failed.
+ * - Neither is present → runs `graphify install --project` then `graphify
+ *   hook install` in `cwd` (unchanged from before), re-peeks
+ *   `hasGraphifyProjectHook`; once that's positive, also runs `graphify
+ *   update <cwd>` and re-peeks `hasGraphifyGraph`. All four checks positive →
+ *   `created`. Any of the four failing → `error` with the causa and manual
+ *   commands (R12) — a hook/install failure keeps its original detail; an
+ *   update failure after a successfully-written hook gets the "hook/skill
+ *   already written, only the graph build failed" detail instead.
+ * Never writes `.claude/settings.json`, the repo's CLAUDE.md, or
+ * `graphify-out/*` itself — those writes are always `graphify install
+ * --project`/`graphify hook install`/`graphify update`'s own job.
  */
 export function installGraphifyProjectScope(
   cwd: string,
   options: InstallGraphifyProjectScopeOptions = {},
 ): GraphifyProjectScopeResult {
-  if (hasGraphifyProjectHook(cwd)) {
-    return { status: "unchanged", detail: "ya instalado" };
-  }
-
   const runner = options.runner ?? runGraphifyCli;
   const manualCommands = manualGraphifyProjectCommands();
+
+  if (hasGraphifyProjectHook(cwd)) {
+    if (hasGraphifyGraph(cwd)) {
+      return { status: "unchanged", detail: "ya instalado" };
+    }
+
+    const updateFailureDetail = runGraphUpdate(cwd, runner);
+    if (updateFailureDetail) {
+      return { status: "error", detail: updateFailureDetail };
+    }
+    return { status: "created", detail: "hook PreToolUse ya estaba instalado; se generó el grafo inicial" };
+  }
 
   const installResult = runner("graphify", GRAPHIFY_INSTALL_PROJECT_ARGS, GRAPHIFY_COMMAND_TIMEOUT_MS, cwd);
   if (installResult.error) {
@@ -319,5 +379,10 @@ export function installGraphifyProjectScope(
     };
   }
 
-  return { status: "created" };
+  const updateFailureDetail = runGraphUpdate(cwd, runner);
+  if (updateFailureDetail) {
+    return { status: "error", detail: updateFailureDetail };
+  }
+
+  return { status: "created", detail: "hook PreToolUse instalado; se generó el grafo inicial" };
 }
