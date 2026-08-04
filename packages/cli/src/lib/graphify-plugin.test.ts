@@ -6,6 +6,7 @@ import {
   type GraphifyBinaryName,
   type GraphifyCliResult,
   type GraphifyRunner,
+  hasGraphifyGraph,
   hasGraphifyProjectHook,
   installGraphifyProjectScope,
   installGraphifyUserScope,
@@ -334,16 +335,73 @@ describe("installGraphifyProjectScope", () => {
     );
   }
 
-  // Covers: R10
-  it("hook already in settings.json → unchanged with 'ya instalado', no spawn", () => {
+  function writeGraphFile(): void {
+    const outDir = join(dir, "graphify-out");
+    mkdirSync(outDir, { recursive: true });
+    writeFileSync(join(outDir, "graph.json"), "{}", "utf-8");
+  }
+
+  it("hook already installed, graph already exists → unchanged with 'ya instalado', no spawn", () => {
     writeHookSettings();
+    writeGraphFile();
     const runner: GraphifyRunner = () => {
-      throw new Error("must not be called — hook already installed");
+      throw new Error("must not be called — hook and graph already installed");
     };
 
     const result = installGraphifyProjectScope(dir, { runner });
 
     expect(result).toEqual({ status: "unchanged", detail: "ya instalado" });
+  });
+
+  it("hook already installed but graph absent → runs only 'graphify update <cwd>' → created", () => {
+    writeHookSettings();
+    const calls: [GraphifyBinaryName, string[]][] = [];
+    const runner: GraphifyRunner = (binary, args, _timeoutMs, cwd) => {
+      calls.push([binary, args]);
+      expect(cwd).toBe(dir);
+      writeGraphFile();
+      return ok();
+    };
+
+    const result = installGraphifyProjectScope(dir, { runner });
+
+    expect(result.status).toBe("created");
+    expect(result.detail).toContain("grafo");
+    expect(calls).toEqual([["graphify", ["update", dir]]]);
+  });
+
+  it("hook already installed, graph absent, 'graphify update' exits non-zero → error, mentions hook already written and manual 'graphify update .'", () => {
+    writeHookSettings();
+    const runner: GraphifyRunner = () => failure("out of memory");
+
+    const result = installGraphifyProjectScope(dir, { runner });
+
+    expect(result.status).toBe("error");
+    expect(result.detail).toContain("out of memory");
+    expect(result.detail).toContain("ya quedaron escritos");
+    expect(result.detail).toContain("graphify update .");
+  });
+
+  it("hook already installed, graph absent, 'graphify update' spawn error → error, mentions hook already written", () => {
+    writeHookSettings();
+    const runner: GraphifyRunner = () => enoent();
+
+    const result = installGraphifyProjectScope(dir, { runner });
+
+    expect(result.status).toBe("error");
+    expect(result.detail).toContain("PATH");
+    expect(result.detail).toContain("ya quedaron escritos");
+  });
+
+  it("hook already installed, graph absent, 'graphify update' exits 0 but graph.json still missing → error", () => {
+    writeHookSettings();
+    const runner: GraphifyRunner = () => ok(); // never writes graph.json
+
+    const result = installGraphifyProjectScope(dir, { runner });
+
+    expect(result.status).toBe("error");
+    expect(result.detail).toContain("graph.json");
+    expect(result.detail).toContain("ya quedaron escritos");
   });
 
   // Covers: R10
@@ -355,21 +413,25 @@ describe("installGraphifyProjectScope", () => {
       if (args.includes("--project")) {
         writeHookSettings();
       }
+      if (args.includes("update")) {
+        writeGraphFile();
+      }
       expect(cwd).toBe(dir);
       return ok();
     };
 
     const result = installGraphifyProjectScope(dir, { runner });
 
-    expect(result).toEqual({ status: "created" });
+    expect(result.status).toBe("created");
     expect(calls).toEqual([
       ["graphify", ["install", "--project"]],
       ["graphify", ["hook", "install"]],
+      ["graphify", ["update", dir]],
     ]);
   });
 
   // Covers: R9
-  it("happy path → runs install --project then hook install, in order, with re-peek positive → created", () => {
+  it("happy path → runs install --project, hook install, then update, in order, with all re-peeks positive → created", () => {
     const calls: [GraphifyBinaryName, string[]][] = [];
     const runner: GraphifyRunner = (binary, args, _timeoutMs, cwd) => {
       calls.push([binary, args]);
@@ -377,27 +439,61 @@ describe("installGraphifyProjectScope", () => {
       if (args.includes("--project")) {
         writeHookSettings();
       }
+      if (args.includes("update")) {
+        writeGraphFile();
+      }
       return ok();
     };
 
     const result = installGraphifyProjectScope(dir, { runner });
 
-    expect(result).toEqual({ status: "created" });
+    expect(result.status).toBe("created");
+    expect(result.detail).toContain("grafo");
     expect(calls).toEqual([
       ["graphify", ["install", "--project"]],
       ["graphify", ["hook", "install"]],
+      ["graphify", ["update", dir]],
+    ]);
+  });
+
+  it("full flow: hook install + hook re-peek succeed but 'graphify update' fails → error, hook stays reported as already written", () => {
+    const calls: [GraphifyBinaryName, string[]][] = [];
+    const runner: GraphifyRunner = (binary, args) => {
+      calls.push([binary, args]);
+      if (args.includes("--project")) writeHookSettings();
+      if (args.includes("update")) return failure("disk full");
+      return ok();
+    };
+
+    const result = installGraphifyProjectScope(dir, { runner });
+
+    expect(result.status).toBe("error");
+    expect(result.detail).toContain("disk full");
+    expect(result.detail).toContain("ya quedaron escritos");
+    expect(calls).toEqual([
+      ["graphify", ["install", "--project"]],
+      ["graphify", ["hook", "install"]],
+      ["graphify", ["update", dir]],
     ]);
   });
 
   // Covers: R12
-  it("both commands succeed but re-peek doesn't find the hook → error", () => {
-    const runner: GraphifyRunner = () => ok(); // never writes settings.json
+  it("both commands succeed but re-peek doesn't find the hook → error, update never attempted", () => {
+    const calls: [GraphifyBinaryName, string[]][] = [];
+    const runner: GraphifyRunner = (binary, args) => {
+      calls.push([binary, args]);
+      return ok(); // never writes settings.json
+    };
 
     const result = installGraphifyProjectScope(dir, { runner });
 
     expect(result.status).toBe("error");
     expect(result.detail).toContain("graphify install --project");
     expect(result.detail).toContain("graphify hook install");
+    expect(calls).toEqual([
+      ["graphify", ["install", "--project"]],
+      ["graphify", ["hook", "install"]],
+    ]);
   });
 
   // Covers: R12
@@ -428,5 +524,48 @@ describe("installGraphifyProjectScope", () => {
     expect(result.status).toBe("error");
     expect(result.detail).toContain("PATH");
     expect(result.detail).toContain("el hook PreToolUse ya quedó escrito en .claude/settings.json");
+  });
+});
+
+describe("hasGraphifyGraph", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "argos-graphify-graph-"));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("is false when graphify-out/graph.json is absent", () => {
+    expect(hasGraphifyGraph(dir)).toBe(false);
+  });
+
+  it("is true when graphify-out/graph.json exists", () => {
+    const outDir = join(dir, "graphify-out");
+    mkdirSync(outDir, { recursive: true });
+    writeFileSync(join(outDir, "graph.json"), "{}", "utf-8");
+    expect(hasGraphifyGraph(dir)).toBe(true);
+  });
+});
+
+describe("manualGraphifyProjectCommands (via installGraphifyProjectScope error details)", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "argos-graphify-manual-"));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("includes 'graphify update .' alongside the install/hook commands in a re-peek failure detail", () => {
+    const runner: GraphifyRunner = () => ok(); // never writes settings.json
+
+    const result = installGraphifyProjectScope(dir, { runner });
+
+    expect(result.detail).toContain("graphify update .");
   });
 });

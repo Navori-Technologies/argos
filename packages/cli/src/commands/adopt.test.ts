@@ -28,10 +28,18 @@ function writeGraphifyHookSettings(dir: string): void {
   );
 }
 
-/** A `GraphifyRunner` fake that simulates a successful `install --project` + `hook install` by writing the real hook file (mirrors `graphify-plugin.test.ts`'s own fakes, since `installGraphifyProjectScope`'s R9 re-peek reads the actual file). */
+/** Writes `<dir>/graphify-out/graph.json`, as `graphify update <dir>` would. */
+function writeGraphifyGraph(dir: string): void {
+  const outDir = join(dir, "graphify-out");
+  mkdirSync(outDir, { recursive: true });
+  writeFileSync(join(outDir, "graph.json"), "{}", "utf-8");
+}
+
+/** A `GraphifyRunner` fake that simulates a successful `install --project` + `hook install` + `update` by writing the real hook file and graph file (mirrors `graphify-plugin.test.ts`'s own fakes, since `installGraphifyProjectScope`'s re-peeks read the actual files). */
 function makeHappyGraphifyRunner(dir: string): GraphifyRunner {
   return (_binary, args) => {
     if (args.includes("--project")) writeGraphifyHookSettings(dir);
+    if (args.includes("update")) writeGraphifyGraph(dir);
     return ok();
   };
 }
@@ -433,10 +441,11 @@ describe("runAdopt — graphify project-scope hook (spec 0006 T4)", () => {
   });
 
   // Covers: R10, R11
-  it("hook already present → 'detected' with 'ya instalado', no spawn, with precedence over binary absent", () => {
+  it("hook and graph already present → 'detected' with 'ya instalado', no spawn, with precedence over binary absent", () => {
     writeGraphifyHookSettings(repoDir);
+    writeGraphifyGraph(repoDir);
     const runner: GraphifyRunner = () => {
-      throw new Error("must not be called — hook already installed");
+      throw new Error("must not be called — hook and graph already installed");
     };
 
     const report = runAdopt({
@@ -448,6 +457,28 @@ describe("runAdopt — graphify project-scope hook (spec 0006 T4)", () => {
     expect(report.exitCode).toBe(0);
     const row = report.rows.find((r) => r.field === "graphify");
     expect(row).toEqual({ field: "graphify", value: "ya instalado", source: "detected" });
+  });
+
+  it("hook present but graph absent → runs graphify update only → 'detected' row, exit code 0", () => {
+    writeGraphifyHookSettings(repoDir);
+    const calls: string[][] = [];
+    const runner: GraphifyRunner = (_binary, args) => {
+      calls.push(args);
+      writeGraphifyGraph(repoDir);
+      return ok();
+    };
+
+    const report = runAdopt({
+      cwd: repoDir,
+      graphifyHasBinary: () => true, // still needed here — the graph must be bootstrapped, unlike the hook+graph-present case
+      graphifyRunner: runner,
+    });
+
+    expect(report.exitCode).toBe(0);
+    expect(calls).toEqual([["update", repoDir]]);
+    const row = report.rows.find((r) => r.field === "graphify");
+    expect(row?.source).toBe("detected");
+    expect(row?.value).toContain("grafo");
   });
 
   // Covers: R11
@@ -466,6 +497,23 @@ describe("runAdopt — graphify project-scope hook (spec 0006 T4)", () => {
     const row = report.rows.find((r) => r.field === "graphify");
     expect(row?.source).toBe("warning");
     expect(row?.value).toContain("graphify install");
+  });
+
+  it("hook present but graph absent, binary also absent → 'warning' row, no exit 1, no spawn", () => {
+    writeGraphifyHookSettings(repoDir);
+    const runner: GraphifyRunner = () => {
+      throw new Error("must not be called — binary absent, adopt must not spawn even with the hook present");
+    };
+
+    const report = runAdopt({
+      cwd: repoDir,
+      graphifyHasBinary: () => false,
+      graphifyRunner: runner,
+    });
+
+    expect(report.exitCode).toBe(0);
+    const row = report.rows.find((r) => r.field === "graphify");
+    expect(row?.source).toBe("warning");
   });
 
   // Covers: R12
