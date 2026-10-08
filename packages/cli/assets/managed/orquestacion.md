@@ -175,7 +175,12 @@ rama base del repo, el quality gate del repo (ficha/argos.config.json) en
 verde, `gh auth status` ok, y confirmación funcional del cambio registrada
 en `impl_<feature>.md` — smoke de endpoint, verificación conducida en
 navegador, o confirmación explícita del operador; sin ella NO se abre el
-PR, el gate estático no la sustituye). Si dice `CHANGES_REQUESTED`, lanza
+PR, el gate estático no la sustituye). Excepción: con `ARGOS_AUTONOMOUS=1` en
+el entorno (modo autónomo, nunca inferido) y sin esa confirmación, el PR se
+abre como draft con label `needs-functional-check` y sección `## Verificación
+funcional pendiente`; el resto del pre-flight sigue obligatorio. Nunca se marca
+ready ni se mergea desde Argos: el ready lo dispara el operador fuera de Argos.
+Si dice `CHANGES_REQUESTED`, lanza
 otro `implementer` fresco — no el pilot.
 
 ### Cuándo NO orquestar (hazlo tú directo)
