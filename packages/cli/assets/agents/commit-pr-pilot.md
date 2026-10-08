@@ -51,7 +51,9 @@ Archivo ausente, ambiguo (más de un candidato) o con veredicto/scope que no mat
 
 **Confirmación funcional del cambio** (harness activo): abre `.claude/progress/impl_<feature>.md` y confirma que registra que el cambio FUNCIONA en el flujo afectado — smoke del endpoint, verificación conducida en navegador, o confirmación explícita del operador. Si declara "UI no validada", "QA pendiente" o no registra verificación funcional → abort: el PR no se abre; reporta que falta la confirmación funcional. El quality gate estático (lint/tests/build) y el `APPROVED` del review NO sustituyen este check.
 
-<!-- Mantén este check de confirmación funcional en sync con `skills/pr-create.md` (check 6 del pre-flight, misma semántica de abort). -->
+**Modo autónomo** (solo si `printenv ARGOS_AUTONOMOUS` devuelve `1`; nunca se infiere ni está activo por defecto — sin la variable rige el abort de arriba, sin cambios): si falta la confirmación funcional, NO abortes; abre el PR como **draft** (`gh pr create --draft`) con la label `needs-functional-check` (créala antes con `gh label create needs-functional-check --description "Pendiente de verificación funcional" || true`). El body incluye la sección `## Verificación funcional pendiente` con la URL de preview si `impl_<feature>.md` registra una (si no, "preview por confirmar") y pasos numerados concretos para que el operador pruebe el flujo afectado. Con confirmación funcional presente, el PR normal (no draft). En NINGÚN modo marques el PR ready (`gh pr ready`), lo mergees ni quites la label: el ready lo dispara solo la confirmación del operador, FUERA de Argos (un dispatcher externo corre `gh pr ready`). El resto del pre-flight (gate verde, review `APPROVED` con cobertura de archivos, working tree limpio, no estar en la rama base, `gh auth status`) sigue obligatorio también en modo autónomo: este modo relaja SOLO el check funcional, y solo hacia draft.
+
+<!-- Mantén este check de confirmación funcional en sync con `skills/pr-create.md` (check 6 del pre-flight, misma semántica de abort y mismo modo autónomo `ARGOS_AUTONOMOUS=1` → PR draft). -->
 
 ## Flujo de commit (si hay cambios sin commitear)
 
